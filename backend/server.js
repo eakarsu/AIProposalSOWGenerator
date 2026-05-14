@@ -1,22 +1,88 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const path = require('path');
+const PDFDocument = require('pdfkit');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
 const pool = require('./db');
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 
-// Middleware
+// Security middleware
+app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: process.env.CLIENT_URL || process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true
 }));
 app.use(express.json());
+
+// AI Rate Limiter: 20 requests per hour per user/IP
+const aiRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  keyGenerator: (req) => req.user?.id?.toString() || req.ip,
+  message: { error: 'AI rate limit exceeded. Max 20 requests per hour.' }
+});
+
+// ============ JSON PARSER HELPERS ============
+function stripMarkdownFences(text) {
+  if (!text || typeof text !== 'string') return text;
+  return text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+}
+
+function repairJSON(jsonStr) {
+  if (!jsonStr || typeof jsonStr !== 'string') return jsonStr;
+  let repaired = jsonStr.replace(/,\s*([}\]])/g, '$1');
+  let openBraces = 0, openBrackets = 0, inString = false, escape = false;
+  for (const ch of repaired) {
+    if (escape) { escape = false; continue; }
+    if (ch === '\\') { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') openBraces++;
+    if (ch === '}') openBraces--;
+    if (ch === '[') openBrackets++;
+    if (ch === ']') openBrackets--;
+  }
+  if (inString) repaired += '"';
+  while (openBraces > 0) { repaired += '}'; openBraces--; }
+  while (openBrackets > 0) { repaired += ']'; openBrackets--; }
+  return repaired;
+}
+
+/**
+ * 3-strategy parseAIJson:
+ * 1. Direct parse after fence strip
+ * 2. Extract first JSON object/array via regex
+ * 3. Repair and parse
+ */
+function parseAIJson(text) {
+  if (!text) return null;
+  try { return JSON.parse(stripMarkdownFences(text)); } catch (_) {}
+  try { const m = text.match(/\{[\s\S]*\}/); if (m) return JSON.parse(m[0]); } catch (_) {}
+  try { const m = text.match(/\[[\s\S]*\]/); if (m) return JSON.parse(m[0]); } catch (_) {}
+  try { return JSON.parse(repairJSON(stripMarkdownFences(text))); } catch (_) {}
+  return null;
+}
+
+// ============ AI RESULT PERSISTENCE ============
+async function persistAiResult(userId, endpoint, entityType, entityId, prompt, rawResponse, tokensUsed, parsedJson) {
+  try {
+    await pool.query(
+      `INSERT INTO ai_results (user_id, endpoint, entity_type, entity_id, model, prompt, raw_response, parsed_json, tokens_used, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'success')`,
+      [userId || null, endpoint, entityType || null, entityId || null,
+       process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022',
+       prompt, rawResponse, parsedJson ? JSON.stringify(parsedJson) : null, tokensUsed || 0]
+    );
+  } catch (e) { console.error('Failed to persist AI result:', e.message); }
+}
 
 // Auth Middleware
 const authMiddleware = async (req, res, next) => {
@@ -507,11 +573,11 @@ async function callOpenRouter({ systemPrompt, userPrompt, maxTokens = 4096, temp
     headers: {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
-      'HTTP-Referer': process.env.FRONTEND_URL || 'http://localhost:3000',
+      'HTTP-Referer': process.env.CLIENT_URL || process.env.FRONTEND_URL || 'http://localhost:3000',
       'X-Title': 'AI Proposal/SOW Generator'
     },
     body: JSON.stringify({
-      model: process.env.OPENROUTER_MODEL || 'anthropic/claude-haiku-4.5',
+      model: process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
@@ -541,7 +607,7 @@ async function callOpenRouter({ systemPrompt, userPrompt, maxTokens = 4096, temp
 }
 
 // ============ AI GENERATION ROUTES ============
-app.post('/api/ai/generate', authMiddleware, async (req, res) => {
+app.post('/api/ai/generate', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const { type, prompt, clientId, projectId, proposalId, sowId } = req.body;
 
@@ -583,7 +649,7 @@ Guidelines:
   }
 });
 
-app.post('/api/ai/generate-proposal', authMiddleware, async (req, res) => {
+app.post('/api/ai/generate-proposal', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const { clientId, projectName, serviceIds, requirements } = req.body;
 
@@ -654,7 +720,7 @@ Write the full proposal now. Make it compelling, specific, and ready to present 
   }
 });
 
-app.post('/api/ai/generate-sow', authMiddleware, async (req, res) => {
+app.post('/api/ai/generate-sow', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const { clientId, projectName, scope, deliverables, timeline } = req.body;
 
@@ -717,7 +783,7 @@ Write the complete SOW now. Every section must be substantive — no placeholder
   }
 });
 
-app.post('/api/ai/improve-text', authMiddleware, async (req, res) => {
+app.post('/api/ai/improve-text', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const { text, style } = req.body;
 
@@ -757,7 +823,7 @@ Return only the improved text.`;
 });
 
 // ============ AI PRICING SUGGESTER ============
-app.post('/api/ai/suggest-pricing', authMiddleware, async (req, res) => {
+app.post('/api/ai/suggest-pricing', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const { projectName, projectType, complexity, durationWeeks, teamSize, requirements, clientId, projectId } = req.body;
 
@@ -845,7 +911,7 @@ CONFIDENCE: [number 0-100 based on how much detail was provided]`;
 });
 
 // ============ AI WIN/LOSS ANALYZER ============
-app.post('/api/ai/analyze-win-loss', authMiddleware, async (req, res) => {
+app.post('/api/ai/analyze-win-loss', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const { proposalTitle, outcome, proposalValue, competitorName, clientFeedback, proposalId, clientId } = req.body;
 
@@ -923,7 +989,7 @@ ANALYSIS: [Comprehensive 2-3 paragraph executive summary tying everything togeth
 });
 
 // ============ AI COMPETITOR DIFFERENTIATOR ============
-app.post('/api/ai/differentiate-competitor', authMiddleware, async (req, res) => {
+app.post('/api/ai/differentiate-competitor', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const { competitorName, industry, ourServices, clientId } = req.body;
 
@@ -1000,7 +1066,7 @@ WIN_THEMES: [3-5 themes to emphasize in proposals when competing against ${compe
 });
 
 // ============ AI TIMELINE GENERATOR ============
-app.post('/api/ai/generate-timeline', authMiddleware, async (req, res) => {
+app.post('/api/ai/generate-timeline', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const { projectName, projectType, startDate, durationWeeks, teamSize, requirements, clientId, projectId } = req.body;
 
@@ -1099,7 +1165,7 @@ TIMELINE: [detailed narrative walking through the project week-by-week or phase-
 });
 
 // ============ AI RISK SECTION WRITER ============
-app.post('/api/ai/generate-risk-section', authMiddleware, async (req, res) => {
+app.post('/api/ai/generate-risk-section', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const { projectName, projectType, riskCategory, projectDescription, clientId, projectId } = req.body;
 
@@ -1195,6 +1261,499 @@ ASSESSMENT: [2-3 paragraph executive summary of the overall risk posture, key co
   }
 });
 
+// ============ PDF EXPORT - PROPOSAL ============
+app.get('/api/proposals/:id/export-pdf', authMiddleware, async (req, res) => {
+  try {
+    const proposalResult = await pool.query(`
+      SELECT p.*, c.company_name, c.contact_name, c.email as client_email,
+             u.first_name || ' ' || u.last_name as creator_name
+      FROM proposals p
+      LEFT JOIN clients c ON p.client_id = c.id
+      LEFT JOIN users u ON p.created_by = u.id
+      WHERE p.id = $1`, [req.params.id]);
+    if (proposalResult.rows.length === 0) return res.status(404).json({ error: 'Proposal not found' });
+    const proposal = proposalResult.rows[0];
+
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="proposal-${proposal.id}.pdf"`);
+    doc.pipe(res);
+
+    // Cover page
+    doc.rect(0, 0, 612, 150).fill('#1a73e8');
+    doc.fillColor('#fff').fontSize(26).font('Helvetica-Bold').text('PROPOSAL', 50, 50, { align: 'center' });
+    doc.fontSize(16).font('Helvetica').text(proposal.title || 'Untitled Proposal', 50, 85, { align: 'center' });
+    doc.fontSize(11).text(`Prepared for: ${proposal.company_name || 'Client'}`, 50, 115, { align: 'center' });
+    doc.fillColor('#000').moveDown(5);
+    doc.fontSize(9).fillColor('#888').text(`Version ${proposal.version || 1} | Generated: ${new Date().toLocaleDateString()} | Status: ${proposal.status}`, { align: 'right' });
+    doc.fillColor('#000').moveDown(0.5);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor('#e0e0e0').stroke();
+    doc.moveDown(1);
+
+    const section = (title) => {
+      doc.fontSize(13).font('Helvetica-Bold').fillColor('#1a73e8').text(title);
+      doc.fillColor('#000').moveDown(0.3);
+    };
+    const body = (text) => {
+      if (!text) return;
+      doc.fontSize(10).font('Helvetica').fillColor('#3c4043').text(text, { width: 495 });
+      doc.moveDown(0.8);
+    };
+
+    if (proposal.executive_summary) { section('Executive Summary'); body(proposal.executive_summary); }
+    if (proposal.scope_of_work) { section('Scope of Work'); body(proposal.scope_of_work); }
+    if (proposal.deliverables) { section('Deliverables'); body(proposal.deliverables); }
+    if (proposal.timeline) { section('Timeline'); body(proposal.timeline); }
+    if (proposal.pricing_summary) { section('Pricing'); body(proposal.pricing_summary); }
+    if (proposal.total_amount) {
+      doc.fontSize(12).font('Helvetica-Bold').fillColor('#0d904f')
+        .text(`Total Investment: $${Number(proposal.total_amount).toLocaleString()}`, { align: 'right' });
+      doc.moveDown(0.8).fillColor('#000');
+    }
+    if (proposal.terms_conditions) { section('Terms & Conditions'); body(proposal.terms_conditions); }
+
+    doc.moveDown(2);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor('#e0e0e0').stroke();
+    doc.moveDown(0.5);
+    doc.fontSize(8).fillColor('#888').text('This proposal is confidential and prepared exclusively for the named recipient.', { align: 'center' });
+    doc.end();
+  } catch (err) {
+    console.error('Proposal PDF Error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ PDF EXPORT - SOW ============
+app.get('/api/sows/:id/export-pdf', authMiddleware, async (req, res) => {
+  try {
+    const sowResult = await pool.query(`
+      SELECT s.*, c.company_name, c.contact_name
+      FROM sows s
+      LEFT JOIN clients c ON s.client_id = c.id
+      WHERE s.id = $1`, [req.params.id]);
+    if (sowResult.rows.length === 0) return res.status(404).json({ error: 'SOW not found' });
+    const sow = sowResult.rows[0];
+
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="sow-${sow.id}.pdf"`);
+    doc.pipe(res);
+
+    // Cover page
+    doc.rect(0, 0, 612, 150).fill('#0d904f');
+    doc.fillColor('#fff').fontSize(22).font('Helvetica-Bold').text('STATEMENT OF WORK', 50, 45, { align: 'center' });
+    doc.fontSize(16).font('Helvetica').text(sow.title || 'Untitled SOW', 50, 78, { align: 'center' });
+    doc.fontSize(11).text(`Client: ${sow.company_name || 'Client'} | Version ${sow.version || 1}`, 50, 110, { align: 'center' });
+    doc.fillColor('#000').moveDown(5);
+    doc.fontSize(9).fillColor('#888').text(`Generated: ${new Date().toLocaleDateString()} | Status: ${sow.status}`, { align: 'right' });
+    doc.fillColor('#000').moveDown(0.5);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor('#e0e0e0').stroke();
+    doc.moveDown(1);
+
+    const section = (title) => {
+      if (doc.y > 700) doc.addPage();
+      doc.fontSize(13).font('Helvetica-Bold').fillColor('#0d904f').text(title);
+      doc.fillColor('#000').moveDown(0.3);
+    };
+    const body = (text) => {
+      if (!text) return;
+      doc.fontSize(10).font('Helvetica').fillColor('#3c4043').text(text, { width: 495 });
+      doc.moveDown(0.8);
+    };
+
+    if (sow.introduction) { section('1. Introduction'); body(sow.introduction); }
+    if (sow.objectives) { section('2. Project Objectives'); body(sow.objectives); }
+    if (sow.scope) { section('3. Scope of Work'); body(sow.scope); }
+    if (sow.deliverables) { section('4. Deliverables'); body(sow.deliverables); }
+    if (sow.timeline) { section('5. Timeline'); body(sow.timeline); }
+    if (sow.milestones) { section('6. Milestones'); body(sow.milestones); }
+    if (sow.assumptions) { section('7. Assumptions'); body(sow.assumptions); }
+    if (sow.constraints) { section('8. Constraints'); body(sow.constraints); }
+    if (sow.acceptance_criteria) { section('9. Acceptance Criteria'); body(sow.acceptance_criteria); }
+    if (sow.payment_terms) { section('10. Payment Terms'); body(sow.payment_terms); }
+    if (sow.change_management) { section('11. Change Management'); body(sow.change_management); }
+    if (sow.governance) { section('12. Governance'); body(sow.governance); }
+
+    doc.moveDown(2);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor('#e0e0e0').stroke();
+    doc.moveDown(0.5);
+    doc.fontSize(8).fillColor('#888').text('This Statement of Work is a binding document once signed by both parties.', { align: 'center' });
+    doc.end();
+  } catch (err) {
+    console.error('SOW PDF Error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ CLIENT PORTAL ============
+// Generate public access token for a proposal
+app.post('/api/proposals/:id/create-link', authMiddleware, async (req, res) => {
+  try {
+    const token = crypto.randomBytes(32).toString('hex');
+    const result = await pool.query(
+      'UPDATE proposals SET public_token = $1 WHERE id = $2 RETURNING *',
+      [token, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Proposal not found' });
+    const portalUrl = `${process.env.CLIENT_URL || process.env.FRONTEND_URL || 'http://localhost:3000'}/portal/proposals/${token}`;
+    res.json({ token, portalUrl, proposal: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Public proposal view (no auth required)
+app.get('/api/public/proposals/:token', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT p.id, p.title, p.status, p.version, p.executive_summary, p.scope_of_work,
+             p.deliverables, p.timeline, p.pricing_summary, p.terms_conditions,
+             p.total_amount, p.valid_until, p.portal_approved_at,
+             c.company_name, c.contact_name
+      FROM proposals p
+      LEFT JOIN clients c ON p.client_id = c.id
+      WHERE p.public_token = $1`, [req.params.token]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Proposal not found or link expired' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Client digital approval via public token
+app.post('/api/public/proposals/:token/approve', async (req, res) => {
+  try {
+    const { approvedBy, signature } = req.body;
+    if (!approvedBy) return res.status(400).json({ error: 'approvedBy name is required' });
+    const result = await pool.query(`
+      UPDATE proposals
+      SET portal_approved_at = NOW(), portal_approved_by = $1, status = 'accepted', accepted_at = NOW()
+      WHERE public_token = $2 AND portal_approved_at IS NULL
+      RETURNING id, title, status, portal_approved_at`,
+      [approvedBy, req.params.token]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Proposal not found, already approved, or link expired' });
+    res.json({ message: 'Proposal approved successfully', proposal: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ PROPOSAL TEMPLATES ============
+app.get('/api/proposal-templates', authMiddleware, async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, parseInt(req.query.limit) || 20);
+    const offset = (page - 1) * limit;
+    const count = await pool.query('SELECT COUNT(*) FROM proposal_templates WHERE status = $1', ['active']);
+    const result = await pool.query(
+      'SELECT * FROM proposal_templates WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+      ['active', limit, offset]
+    );
+    res.json({ data: result.rows, pagination: { page, limit, total: parseInt(count.rows[0].count), totalPages: Math.ceil(count.rows[0].count / limit) } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/proposal-templates', authMiddleware, async (req, res) => {
+  try {
+    const { name, type, description, sections, variables, is_default } = req.body;
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    const result = await pool.query(
+      `INSERT INTO proposal_templates (name, type, description, sections, variables, is_default, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [name, type || 'proposal', description || null,
+       sections ? JSON.stringify(sections) : null,
+       variables ? JSON.stringify(variables) : null,
+       is_default || false, req.user.id]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/proposal-templates/:id', authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM proposal_templates WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Template not found' });
+    res.json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/proposal-templates/:id', authMiddleware, async (req, res) => {
+  try {
+    const { name, type, description, sections, variables, is_default } = req.body;
+    const result = await pool.query(
+      `UPDATE proposal_templates SET name=$1,type=$2,description=$3,sections=$4,variables=$5,is_default=$6,updated_at=NOW()
+       WHERE id=$7 RETURNING *`,
+      [name, type, description, sections ? JSON.stringify(sections) : null, variables ? JSON.stringify(variables) : null, is_default || false, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Template not found' });
+    res.json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/proposal-templates/:id', authMiddleware, async (req, res) => {
+  try {
+    await pool.query('UPDATE proposal_templates SET status=$1 WHERE id=$2', ['deleted', req.params.id]);
+    res.json({ message: 'Template deleted' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Create proposal from template (merge engine)
+app.post('/api/proposals/from-template', authMiddleware, async (req, res) => {
+  try {
+    const { templateId, clientId, projectId, title, variables } = req.body;
+    if (!templateId) return res.status(400).json({ error: 'templateId is required' });
+
+    const tmplResult = await pool.query('SELECT * FROM proposal_templates WHERE id = $1', [templateId]);
+    if (tmplResult.rows.length === 0) return res.status(404).json({ error: 'Template not found' });
+    const template = tmplResult.rows[0];
+
+    // Merge variables into template sections
+    const mergeVars = (text, vars) => {
+      if (!text || !vars) return text;
+      let result = text;
+      Object.entries(vars).forEach(([key, val]) => {
+        result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), val || '');
+        result = result.replace(new RegExp(`\\[${key}\\]`, 'g'), val || '');
+      });
+      return result;
+    };
+
+    const sections = template.sections || {};
+    const merged = {};
+    Object.entries(sections).forEach(([key, val]) => {
+      merged[key] = mergeVars(typeof val === 'string' ? val : JSON.stringify(val), variables || {});
+    });
+
+    // Get client info for context
+    let clientInfo = {};
+    if (clientId) {
+      const clientResult = await pool.query('SELECT * FROM clients WHERE id = $1', [clientId]);
+      if (clientResult.rows.length > 0) clientInfo = clientResult.rows[0];
+    }
+
+    // Create the proposal
+    const propResult = await pool.query(
+      `INSERT INTO proposals (title, client_id, project_id, template_id, status, version,
+         executive_summary, scope_of_work, deliverables, timeline, pricing_summary, terms_conditions, created_by)
+       VALUES ($1,$2,$3,$4,'draft',1,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [title || template.name, clientId || null, projectId || null, templateId,
+       merged.executive_summary || merged.executiveSummary || null,
+       merged.scope_of_work || merged.scopeOfWork || null,
+       merged.deliverables || null,
+       merged.timeline || null,
+       merged.pricing_summary || merged.pricingSummary || null,
+       merged.terms_conditions || merged.termsConditions || null,
+       req.user.id]
+    );
+
+    // Update template usage count
+    await pool.query('UPDATE proposal_templates SET usage_count = usage_count + 1 WHERE id = $1', [templateId]);
+
+    res.status(201).json({ proposal: propResult.rows[0], template, mergedSections: merged });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ============ REVISION TRACKING ============
+// Get revision history for a proposal
+app.get('/api/proposals/:id/revisions', authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT pr.*, u.first_name || ' ' || u.last_name as changed_by_name
+       FROM proposal_revisions pr
+       LEFT JOIN users u ON pr.changed_by = u.id
+       WHERE pr.proposal_id = $1 ORDER BY pr.version DESC`,
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Helper: create revision on proposal update
+async function createRevision(proposalId, content, changeSummary, userId) {
+  try {
+    const versionResult = await pool.query(
+      'SELECT COALESCE(MAX(version), 0) as maxv FROM proposal_revisions WHERE proposal_id = $1', [proposalId]
+    );
+    const nextVersion = parseInt(versionResult.rows[0].maxv) + 1;
+    await pool.query(
+      `INSERT INTO proposal_revisions (proposal_id, version, content, change_summary, changed_by)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [proposalId, nextVersion, JSON.stringify(content), changeSummary || 'Manual edit', userId]
+    );
+  } catch (e) { console.error('Failed to create revision:', e.message); }
+}
+
+// Intercept proposal updates to create revisions - add revision middleware
+app.use('/api/proposals/:id', authMiddleware, async (req, res, next) => {
+  if (req.method === 'PUT' && req.params.id && !isNaN(req.params.id)) {
+    // Get current state before update
+    try {
+      const current = await pool.query('SELECT * FROM proposals WHERE id = $1', [req.params.id]);
+      if (current.rows.length > 0) {
+        req._proposalBeforeUpdate = current.rows[0];
+      }
+    } catch (e) {}
+  }
+  next();
+});
+
+// ============ AI SCOPE REFINER ============
+app.post('/api/proposals/:id/ai-refine-scope', authMiddleware, aiRateLimiter, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM proposals WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Proposal not found' });
+    const proposal = result.rows[0];
+
+    const systemPrompt = `You are a senior project delivery expert and proposal strategist with 20+ years of experience.
+You specialize in identifying scope gaps, ambiguities, and risks in project proposals.`;
+
+    const userPrompt = `Analyze this proposal and provide structured improvement suggestions.
+
+Proposal Title: ${proposal.title}
+Executive Summary: ${proposal.executive_summary || 'Not provided'}
+Scope of Work: ${proposal.scope_of_work || 'Not provided'}
+Deliverables: ${proposal.deliverables || 'Not provided'}
+Timeline: ${proposal.timeline || 'Not provided'}
+Pricing: ${proposal.pricing_summary || 'Not provided'}
+Terms: ${proposal.terms_conditions || 'Not provided'}
+
+Respond with ONLY valid JSON:
+{
+  "clarityIssues": [{"section":"text","issue":"text","suggestion":"text"}],
+  "missingDeliverables": ["deliverable1","deliverable2"],
+  "identifiedRisks": [{"risk":"text","severity":"high|medium|low","mitigation":"text"}],
+  "scopeGaps": ["gap1","gap2"],
+  "strengthsToKeep": ["strength1","strength2"],
+  "overallScore": number (0-100),
+  "priorityActions": ["action1","action2","action3"],
+  "improvedScopeSuggestion": "text"
+}`;
+
+    const { content: aiResponse, tokensUsed } = await callOpenRouter({ systemPrompt, userPrompt });
+    const parsed = parseAIJson(aiResponse);
+    await persistAiResult(req.user.id, 'ai-refine-scope', 'proposal', proposal.id, userPrompt, aiResponse, tokensUsed, parsed);
+
+    res.json({ refinement: parsed || {}, rawResponse: aiResponse, proposal: { id: proposal.id, title: proposal.title } });
+  } catch (err) {
+    console.error('AI Scope Refiner Error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ AI PRICING ANALYZER ============
+app.post('/api/proposals/:id/ai-price-check', authMiddleware, aiRateLimiter, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM proposals WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Proposal not found' });
+    const proposal = result.rows[0];
+
+    const systemPrompt = `You are a veteran pricing strategist with 20+ years at top technology consulting firms.
+You benchmark project pricing against current market rates and industry standards.`;
+
+    const userPrompt = `Analyze the pricing in this proposal against industry benchmarks.
+
+Proposal Title: ${proposal.title}
+Scope: ${proposal.scope_of_work || 'Not specified'}
+Deliverables: ${proposal.deliverables || 'Not specified'}
+Timeline: ${proposal.timeline || 'Not specified'}
+Pricing Summary: ${proposal.pricing_summary || 'Not specified'}
+Total Amount: ${proposal.total_amount ? '$' + Number(proposal.total_amount).toLocaleString() : 'Not specified'}
+
+Respond with ONLY valid JSON:
+{
+  "pricingAssessment": "under_market|fair|over_market",
+  "marketRate": {"low": number, "mid": number, "high": number},
+  "currentTotal": number,
+  "recommendedRange": {"min": number, "max": number},
+  "percentageFromMarket": number,
+  "flags": [{"issue":"text","severity":"high|medium|low","detail":"text"}],
+  "pricingBreakdown": [{"item":"text","estimatedHours":number,"rate":number,"total":number}],
+  "recommendations": ["rec1","rec2"],
+  "confidence": number (0-100),
+  "analysis": "narrative text"
+}`;
+
+    const { content: aiResponse, tokensUsed } = await callOpenRouter({ systemPrompt, userPrompt });
+    const parsed = parseAIJson(aiResponse);
+    await persistAiResult(req.user.id, 'ai-price-check', 'proposal', proposal.id, userPrompt, aiResponse, tokensUsed, parsed);
+
+    res.json({ priceCheck: parsed || {}, rawResponse: aiResponse, proposal: { id: proposal.id, title: proposal.title, totalAmount: proposal.total_amount } });
+  } catch (err) {
+    console.error('AI Price Check Error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ CONTRACT GENERATOR ============
+app.post('/api/proposals/:id/generate-contract', authMiddleware, aiRateLimiter, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT p.*, c.company_name, c.contact_name, c.address as client_address,
+             c.city as client_city, c.state as client_state
+      FROM proposals p
+      LEFT JOIN clients c ON p.client_id = c.id
+      WHERE p.id = $1`, [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Proposal not found' });
+    const proposal = result.rows[0];
+
+    const systemPrompt = `You are a senior contract attorney and business development expert specializing in technology services contracts.
+You transform approved proposals into formal, legally-sound contracts with appropriate protective clauses.`;
+
+    const userPrompt = `Transform this approved proposal into a formal contract.
+
+Proposal: ${proposal.title}
+Client: ${proposal.company_name || 'Client'}
+Status: ${proposal.status}
+Scope: ${proposal.scope_of_work || 'As specified in proposal'}
+Deliverables: ${proposal.deliverables || 'As specified in proposal'}
+Timeline: ${proposal.timeline || 'As mutually agreed'}
+Pricing: ${proposal.pricing_summary || 'As specified'}
+Total: ${proposal.total_amount ? '$' + Number(proposal.total_amount).toLocaleString() : 'TBD'}
+Terms: ${proposal.terms_conditions || 'Standard terms apply'}
+
+Generate a comprehensive contract. Respond with ONLY valid JSON:
+{
+  "contractTitle": "text",
+  "effectiveDate": "text",
+  "parties": {"serviceProvider": "text", "client": "text"},
+  "recitals": "text",
+  "scope": "text",
+  "deliverables": "text",
+  "timeline": "text",
+  "paymentTerms": "text",
+  "ipClauses": "text",
+  "liabilityLimitations": "text",
+  "confidentiality": "text",
+  "termination": "text",
+  "disputeResolution": "text",
+  "governingLaw": "text",
+  "fullContractText": "complete formatted contract text"
+}`;
+
+    const { content: aiResponse, tokensUsed } = await callOpenRouter({ systemPrompt, userPrompt, maxTokens: 6000 });
+    const parsed = parseAIJson(aiResponse);
+    await persistAiResult(req.user.id, 'generate-contract', 'proposal', proposal.id, userPrompt, aiResponse, tokensUsed, parsed);
+
+    res.json({ contract: parsed || {}, rawResponse: aiResponse, proposal: { id: proposal.id, title: proposal.title } });
+  } catch (err) {
+    console.error('Contract Generator Error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ AI RESULTS CRUD ============
+app.get('/api/ai-results', authMiddleware, async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, parseInt(req.query.limit) || 20);
+    const offset = (page - 1) * limit;
+    const count = await pool.query('SELECT COUNT(*) FROM ai_results');
+    const result = await pool.query('SELECT * FROM ai_results ORDER BY created_at DESC LIMIT $1 OFFSET $2', [limit, offset]);
+    res.json({ data: result.rows, pagination: { page, limit, total: parseInt(count.rows[0].count), totalPages: Math.ceil(count.rows[0].count / limit) } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ============ HEALTH CHECK ============
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -1204,3 +1763,20 @@ app.get('/api/health', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+// AI feature mount: sow-generate
+app.use('/api/ai/sow-generate', require('./routes/ai-sow-generate'));
+// === Batch 07 Gaps & Frontend Mounts ===
+app.use('/api/gap-no-ai-sow-generation-endpoint', require('./routes/gap-no-ai-sow-generation-endpoint'));
+app.use('/api/gap-no-ai-proposalfrombrief-generation', require('./routes/gap-no-ai-proposalfrombrief-generation'));
+app.use('/api/gap-no-ai-clauseterm-recommendation', require('./routes/gap-no-ai-clauseterm-recommendation'));
+app.use('/api/gap-no-ai-pricing-intelligence', require('./routes/gap-no-ai-pricing-intelligence'));
+app.use('/api/gap-no-ai-risk-allocation-generation', require('./routes/gap-no-ai-risk-allocation-generation'));
+app.use('/api/gap-no-client-project-or-proposal-crud', require('./routes/gap-no-client-project-or-proposal-crud'));
+app.use('/api/gap-no-template-library-or-section-snippets', require('./routes/gap-no-template-library-or-section-snippets'));
+app.use('/api/gap-no-pricingratecard-management', require('./routes/gap-no-pricingratecard-management'));
+app.use('/api/gap-no-pdf-export-route-codebase-imports-pdf-lib', require('./routes/gap-no-pdf-export-route-codebase-imports-pdf-lib'));
+app.use('/api/gap-no-esignature-workflow', require('./routes/gap-no-esignature-workflow'));
+app.use('/api/gap-no-changeorder-tracking', require('./routes/gap-no-changeorder-tracking'));
+app.use('/api/gap-no-notifications-audit-log-or-rbac', require('./routes/gap-no-notifications-audit-log-or-rbac'));
+// === End Batch 07 ===

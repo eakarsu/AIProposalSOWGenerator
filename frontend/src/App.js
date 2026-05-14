@@ -1,6 +1,28 @@
 import React, { useState, useEffect, useCallback, createContext, useContext, Component } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
+
+// === Batch 07 Gaps & Frontend Mounts ===
+import CfMultisectionSowGeneration from './pages/CfMultisectionSowGeneration';
+import CfProposalTemplateLibrary from './pages/CfProposalTemplateLibrary';
+import CfPricingIntelligence from './pages/CfPricingIntelligence';
+import CfRiskAllocation from './pages/CfRiskAllocation';
+import CfContractClauseRecommender from './pages/CfContractClauseRecommender';
+import CfPostsignatureTracking from './pages/CfPostsignatureTracking';
+import GapNoAiSowGenerationEndpoint from './pages/GapNoAiSowGenerationEndpoint';
+import GapNoAiProposalfrombriefGeneration from './pages/GapNoAiProposalfrombriefGeneration';
+import GapNoAiClausetermRecommendation from './pages/GapNoAiClausetermRecommendation';
+import GapNoAiPricingIntelligence from './pages/GapNoAiPricingIntelligence';
+import GapNoAiRiskAllocationGeneration from './pages/GapNoAiRiskAllocationGeneration';
+import GapNoClientProjectOrProposalCrud from './pages/GapNoClientProjectOrProposalCrud';
+import GapNoTemplateLibraryOrSectionSnippets from './pages/GapNoTemplateLibraryOrSectionSnippets';
+import GapNoPricingratecardManagement from './pages/GapNoPricingratecardManagement';
+import GapNoPdfExportRouteCodebaseImportsPdfLib from './pages/GapNoPdfExportRouteCodebaseImportsPdfLib';
+import GapNoEsignatureWorkflow from './pages/GapNoEsignatureWorkflow';
+import GapNoChangeorderTracking from './pages/GapNoChangeorderTracking';
+import GapNoNotificationsAuditLogOrRbac from './pages/GapNoNotificationsAuditLogOrRbac';
+// === End Batch 07 ===
+
 import {
   LayoutDashboard, Users, Building2, FolderKanban, FileText, FileCheck,
   DollarSign, Briefcase, FileCode, Sparkles, Files, BarChart3,
@@ -535,6 +557,7 @@ const Sidebar = ({ onNavigate, isOpen }) => {
       { icon: Briefcase, label: 'Services', path: '/services' },
       { icon: DollarSign, label: 'Pricing', path: '/pricing' },
       { icon: FileCode, label: 'Templates', path: '/templates' },
+      { icon: Files, label: 'Proposal Templates', path: '/proposal-templates' },
       { icon: Users, label: 'Team', path: '/team', roles: ['admin', 'manager'] },
     ]},
     { section: 'AI Tools', items: [
@@ -1302,52 +1325,420 @@ const ProposalList = () => (
   />
 );
 
-// Proposal Detail
-const ProposalDetail = () => (
-  <DetailView
-    endpoint="proposals"
-    title="Proposal"
-    renderContent={(item) => (
+// Proposal Detail (enhanced with PDF export, client portal, revision history, AI scope refiner, pricing analysis, contract generator)
+const ProposalDetail = () => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [item, setItem] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('details');
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [portalLink, setPortalLink] = useState(null);
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [revisions, setRevisions] = useState([]);
+  const [revisionsLoading, setRevisionsLoading] = useState(false);
+  const [scopeRefine, setScopeRefine] = useState(null);
+  const [scopeLoading, setScopeLoading] = useState(false);
+  const [priceCheck, setPriceCheck] = useState(null);
+  const [priceLoading, setPriceLoading] = useState(false);
+  const [contract, setContract] = useState(null);
+  const [contractLoading, setContractLoading] = useState(false);
+
+  useEffect(() => {
+    axios.get(`${API_URL}/proposals/${id}`)
+      .then(res => setItem(res.data))
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [id]);
+
+  const handleExportPDF = async () => {
+    setPdfLoading(true);
+    try {
+      const response = await axios.get(`${API_URL}/proposals/${id}/export-pdf`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `proposal-${id}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('PDF downloaded successfully');
+    } catch (err) { toast.error('PDF export failed: ' + (err.response?.data?.error || err.message)); }
+    setPdfLoading(false);
+  };
+
+  const handleCreatePortalLink = async () => {
+    setPortalLoading(true);
+    try {
+      const { data } = await axios.post(`${API_URL}/proposals/${id}/create-link`);
+      setPortalLink(data.portalUrl);
+      toast.success('Client portal link created!');
+    } catch (err) { toast.error('Failed to create portal link'); }
+    setPortalLoading(false);
+  };
+
+  const handleLoadRevisions = async () => {
+    setRevisionsLoading(true); setActiveTab('revisions');
+    try {
+      const { data } = await axios.get(`${API_URL}/proposals/${id}/revisions`);
+      setRevisions(data);
+    } catch (err) { toast.error('Failed to load revisions'); }
+    setRevisionsLoading(false);
+  };
+
+  const handleRefineScope = async () => {
+    setScopeLoading(true); setActiveTab('ai-refine'); setScopeRefine(null);
+    try {
+      const { data } = await axios.post(`${API_URL}/proposals/${id}/ai-refine-scope`);
+      setScopeRefine(data.refinement);
+      toast.success('Scope analysis complete');
+    } catch (err) { toast.error('AI scope refiner failed: ' + (err.response?.data?.error || err.message)); }
+    setScopeLoading(false);
+  };
+
+  const handlePriceCheck = async () => {
+    setPriceLoading(true); setActiveTab('ai-price'); setPriceCheck(null);
+    try {
+      const { data } = await axios.post(`${API_URL}/proposals/${id}/ai-price-check`);
+      setPriceCheck(data.priceCheck);
+      toast.success('Pricing analysis complete');
+    } catch (err) { toast.error('Pricing analysis failed: ' + (err.response?.data?.error || err.message)); }
+    setPriceLoading(false);
+  };
+
+  const handleGenerateContract = async () => {
+    setContractLoading(true); setActiveTab('contract'); setContract(null);
+    try {
+      const { data } = await axios.post(`${API_URL}/proposals/${id}/generate-contract`);
+      setContract(data.contract);
+      toast.success('Contract generated');
+    } catch (err) { toast.error('Contract generation failed: ' + (err.response?.data?.error || err.message)); }
+    setContractLoading(false);
+  };
+
+  if (loading) return <div className="loading"><div className="spinner"></div>Loading...</div>;
+  if (!item) return <div className="empty-state"><h3>Proposal not found</h3></div>;
+
+  const tabs = ['details', 'revisions', 'portal', 'ai-refine', 'ai-price', 'contract'];
+  const tabLabels = { details: 'Details', revisions: 'Revisions', portal: 'Client Portal', 'ai-refine': 'AI Scope Refiner', 'ai-price': 'Pricing Analysis', contract: 'Contract Generator' };
+  const assessmentColor = { under_market: '#0d904f', fair: '#1a73e8', over_market: '#d93025' };
+
+  return (
+    <div>
+      <button className="btn btn-ghost" onClick={() => navigate(-1)} style={{ marginBottom: 16 }}>
+        <ArrowLeft size={18} /> Back
+      </button>
       <div className="detail-container">
         <div className="detail-header">
           <div>
             <h1 className="detail-title">{item.title}</h1>
             <div className="detail-meta">
               <span className={`status-badge ${item.status}`}>{item.status}</span>
-              <span>${(item.total_amount || 0).toLocaleString()}</span>
+              <span style={{fontWeight:600,color:'#0d904f'}}>${(item.total_amount || 0).toLocaleString()}</span>
+              {item.portal_approved_at && <span className="status-badge accepted">Client Approved</span>}
             </div>
           </div>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            <button className="btn btn-secondary" onClick={handleExportPDF} disabled={pdfLoading}>
+              <Download size={16} /> {pdfLoading ? 'Generating...' : 'Export PDF'}
+            </button>
+            <button className="btn btn-secondary" onClick={handleCreatePortalLink} disabled={portalLoading} style={{background:'#e8f5e9',color:'#2e7d32'}}>
+              {portalLoading ? 'Creating...' : 'Create Portal Link'}
+            </button>
+            <button className="btn btn-secondary" onClick={handleLoadRevisions}>
+              <Clock size={16} /> Revisions
+            </button>
+            <button className="btn btn-ai" onClick={handleRefineScope} disabled={scopeLoading}>
+              <Wand2 size={16} /> AI Refine Scope
+            </button>
+            <button className="btn btn-ai" onClick={handlePriceCheck} disabled={priceLoading}>
+              <DollarSign size={16} /> Price Check
+            </button>
+            <button className="btn btn-ai" onClick={handleGenerateContract} disabled={contractLoading}>
+              <Award size={16} /> Generate Contract
+            </button>
+          </div>
         </div>
-        <div className="detail-body">
-          {item.executive_summary && (
-            <div className="detail-section">
-              <h3 className="detail-section-title">Executive Summary</h3>
-              <p>{item.executive_summary}</p>
-            </div>
-          )}
-          {item.scope_of_work && (
-            <div className="detail-section">
-              <h3 className="detail-section-title">Scope of Work</h3>
-              <p>{item.scope_of_work}</p>
-            </div>
-          )}
-          {item.deliverables && (
-            <div className="detail-section">
-              <h3 className="detail-section-title">Deliverables</h3>
-              <p>{item.deliverables}</p>
-            </div>
-          )}
-          {item.timeline && (
-            <div className="detail-section">
-              <h3 className="detail-section-title">Timeline</h3>
-              <p>{item.timeline}</p>
-            </div>
-          )}
+
+        {/* Tabs */}
+        <div style={{display:'flex',gap:4,borderBottom:'2px solid #e0e0e0',marginBottom:16,flexWrap:'wrap'}}>
+          {tabs.map(tab => (
+            <button key={tab} onClick={() => setActiveTab(tab)}
+              style={{padding:'8px 14px',border:'none',background:'none',cursor:'pointer',fontSize:13,
+                borderBottom: activeTab===tab ? '2px solid #1a73e8' : '2px solid transparent',
+                color: activeTab===tab ? '#1a73e8' : '#5f6368', fontWeight: activeTab===tab ? 600 : 400,
+                marginBottom:-2}}>
+              {tabLabels[tab]}
+            </button>
+          ))}
         </div>
+
+        {/* Details Tab */}
+        {activeTab === 'details' && (
+          <div className="detail-body">
+            {item.executive_summary && (<div className="detail-section"><h3 className="detail-section-title">Executive Summary</h3><MarkdownText content={item.executive_summary} /></div>)}
+            {item.scope_of_work && (<div className="detail-section"><h3 className="detail-section-title">Scope of Work</h3><MarkdownText content={item.scope_of_work} /></div>)}
+            {item.deliverables && (<div className="detail-section"><h3 className="detail-section-title">Deliverables</h3><MarkdownText content={item.deliverables} /></div>)}
+            {item.timeline && (<div className="detail-section"><h3 className="detail-section-title">Timeline</h3><MarkdownText content={item.timeline} /></div>)}
+            {item.pricing_summary && (<div className="detail-section"><h3 className="detail-section-title">Pricing</h3><MarkdownText content={item.pricing_summary} /></div>)}
+            {item.terms_conditions && (<div className="detail-section"><h3 className="detail-section-title">Terms & Conditions</h3><MarkdownText content={item.terms_conditions} /></div>)}
+          </div>
+        )}
+
+        {/* Client Portal Tab */}
+        {activeTab === 'portal' && (
+          <div>
+            <h3 style={{marginBottom:16}}>Client Portal</h3>
+            {item.portal_approved_at && (
+              <div style={{background:'#e6f4ea',borderRadius:8,padding:16,marginBottom:16,border:'1px solid #4caf50'}}>
+                <strong style={{color:'#2e7d32'}}>Approved by client</strong>
+                <div style={{fontSize:13,marginTop:4}}>Approved by: {item.portal_approved_by || 'Client'} on {new Date(item.portal_approved_at).toLocaleString()}</div>
+              </div>
+            )}
+            {item.public_token && (
+              <div style={{background:'#e8f0fe',borderRadius:8,padding:16,marginBottom:16}}>
+                <div style={{fontSize:13,fontWeight:600,marginBottom:8}}>Existing portal link:</div>
+                <div style={{background:'#fff',padding:10,borderRadius:6,fontFamily:'monospace',fontSize:12,wordBreak:'break-all'}}>
+                  {window.location.origin}/portal/proposals/{item.public_token}
+                </div>
+                <button className="btn btn-secondary btn-sm" style={{marginTop:8}}
+                  onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/portal/proposals/${item.public_token}`); toast.success('Copied!'); }}>
+                  Copy Link
+                </button>
+              </div>
+            )}
+            {portalLink && (
+              <div style={{background:'#e8f0fe',borderRadius:8,padding:16}}>
+                <div style={{fontSize:13,fontWeight:600,marginBottom:8}}>New portal link created:</div>
+                <div style={{background:'#fff',padding:10,borderRadius:6,fontFamily:'monospace',fontSize:12,wordBreak:'break-all'}}>{portalLink}</div>
+                <button className="btn btn-secondary btn-sm" style={{marginTop:8}}
+                  onClick={() => { navigator.clipboard.writeText(portalLink); toast.success('Copied!'); }}>
+                  Copy Link
+                </button>
+              </div>
+            )}
+            {!portalLink && !item.public_token && (
+              <div style={{textAlign:'center',padding:32,color:'#5f6368'}}>
+                <p>No portal link exists yet. Click "Create Portal Link" to generate a shareable link for the client.</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Revision History Tab */}
+        {activeTab === 'revisions' && (
+          <div>
+            <h3 style={{marginBottom:16}}>Revision History</h3>
+            {revisionsLoading && <div style={{textAlign:'center',padding:24}}>Loading revisions...</div>}
+            {!revisionsLoading && revisions.length === 0 && (
+              <div style={{textAlign:'center',padding:32,color:'#5f6368'}}>No revision history found. Revisions are created automatically on updates.</div>
+            )}
+            {!revisionsLoading && revisions.map((rev, i) => (
+              <div key={rev.id} style={{display:'flex',gap:12,marginBottom:20}}>
+                <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
+                  <div style={{width:36,height:36,borderRadius:'50%',background:'#1a73e8',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:13}}>{rev.version}</div>
+                  {i < revisions.length - 1 && <div style={{width:2,flex:1,background:'#e0e0e0',marginTop:4}}></div>}
+                </div>
+                <div style={{flex:1,paddingBottom:20}}>
+                  <div style={{fontWeight:600,fontSize:14}}>Version {rev.version}</div>
+                  <div style={{fontSize:12,color:'#5f6368',marginBottom:4}}>{new Date(rev.created_at).toLocaleString()} by {rev.changed_by_name || 'System'}</div>
+                  {rev.change_summary && <div style={{fontSize:13,color:'#3c4043'}}>{rev.change_summary}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* AI Scope Refiner Tab */}
+        {activeTab === 'ai-refine' && (
+          <div>
+            <h3 style={{marginBottom:16}}>AI Scope Refiner</h3>
+            {scopeLoading && <div style={{textAlign:'center',padding:32}}>AI is analyzing your proposal scope...</div>}
+            {!scopeLoading && !scopeRefine && (
+              <div style={{textAlign:'center',padding:32,color:'#5f6368'}}>Click "AI Refine Scope" to get AI suggestions for improving clarity, identifying risks, and finding missing deliverables.</div>
+            )}
+            {!scopeLoading && scopeRefine && (
+              <div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:20}}>
+                  <div style={{background:'#e8f0fe',borderRadius:8,padding:16,textAlign:'center'}}>
+                    <div style={{fontSize:11,color:'#5f6368'}}>Overall Score</div>
+                    <div style={{fontSize:32,fontWeight:700,color:scopeRefine.overallScore>=75?'#0d904f':scopeRefine.overallScore>=50?'#e37400':'#d93025'}}>{scopeRefine.overallScore}/100</div>
+                  </div>
+                  {scopeRefine.identifiedRisks && (
+                    <div style={{background:'#fce8e6',borderRadius:8,padding:16,textAlign:'center'}}>
+                      <div style={{fontSize:11,color:'#5f6368'}}>Risks Found</div>
+                      <div style={{fontSize:32,fontWeight:700,color:'#d93025'}}>{scopeRefine.identifiedRisks.length}</div>
+                    </div>
+                  )}
+                  {scopeRefine.missingDeliverables && (
+                    <div style={{background:'#fef7e0',borderRadius:8,padding:16,textAlign:'center'}}>
+                      <div style={{fontSize:11,color:'#5f6368'}}>Missing Deliverables</div>
+                      <div style={{fontSize:32,fontWeight:700,color:'#e37400'}}>{scopeRefine.missingDeliverables.length}</div>
+                    </div>
+                  )}
+                </div>
+                {scopeRefine.priorityActions?.length > 0 && (
+                  <div style={{background:'#f8f9fa',borderRadius:8,padding:16,marginBottom:16,border:'1px solid #e0e0e0'}}>
+                    <strong style={{fontSize:14}}>Priority Actions</strong>
+                    {scopeRefine.priorityActions.map((a,i) => (
+                      <div key={i} style={{display:'flex',gap:8,marginTop:8,fontSize:13}}>
+                        <span style={{color:'#1a73e8',fontWeight:700}}>{i+1}.</span><span>{a}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {scopeRefine.clarityIssues?.length > 0 && (
+                  <div style={{marginBottom:16}}>
+                    <strong style={{fontSize:14}}>Clarity Issues</strong>
+                    {scopeRefine.clarityIssues.map((issue,i) => (
+                      <div key={i} style={{background:'#fff3e0',borderRadius:8,padding:12,marginTop:8,border:'1px solid #ff9800'}}>
+                        <div style={{fontSize:12,color:'#e65100',fontWeight:600}}>{issue.section}</div>
+                        <div style={{fontSize:13,marginTop:4}}>{issue.issue}</div>
+                        <div style={{fontSize:12,color:'#0d904f',marginTop:4}}>Suggestion: {issue.suggestion}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {scopeRefine.identifiedRisks?.length > 0 && (
+                  <div style={{marginBottom:16}}>
+                    <strong style={{fontSize:14}}>Identified Risks</strong>
+                    {scopeRefine.identifiedRisks.map((r,i) => (
+                      <div key={i} style={{background:'#fce8e6',borderRadius:8,padding:12,marginTop:8,border:'1px solid #f44336'}}>
+                        <div style={{display:'flex',justifyContent:'space-between'}}>
+                          <strong style={{fontSize:13}}>{r.risk}</strong>
+                          <span className={`status-badge ${r.severity}`}>{r.severity}</span>
+                        </div>
+                        {r.mitigation && <div style={{fontSize:12,color:'#5f6368',marginTop:4}}>Mitigation: {r.mitigation}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {scopeRefine.improvedScopeSuggestion && (
+                  <div style={{background:'#e6f4ea',borderRadius:8,padding:16,border:'1px solid #4caf50'}}>
+                    <strong style={{fontSize:14}}>Improved Scope Suggestion</strong>
+                    <p style={{fontSize:13,marginTop:8,lineHeight:1.6}}>{scopeRefine.improvedScopeSuggestion}</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* AI Pricing Analysis Tab */}
+        {activeTab === 'ai-price' && (
+          <div>
+            <h3 style={{marginBottom:16}}>AI Pricing Analysis</h3>
+            {priceLoading && <div style={{textAlign:'center',padding:32}}>AI is analyzing pricing against market benchmarks...</div>}
+            {!priceLoading && !priceCheck && (
+              <div style={{textAlign:'center',padding:32,color:'#5f6368'}}>Click "Price Check" to compare your pricing against industry benchmarks.</div>
+            )}
+            {!priceLoading && priceCheck && (
+              <div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:20}}>
+                  <div style={{background:'#e8f0fe',borderRadius:8,padding:16,textAlign:'center'}}>
+                    <div style={{fontSize:11,color:'#5f6368'}}>Assessment</div>
+                    <div style={{fontSize:14,fontWeight:700,color:assessmentColor[priceCheck.pricingAssessment],textTransform:'capitalize'}}>{priceCheck.pricingAssessment?.replace(/_/g,' ') || '-'}</div>
+                  </div>
+                  <div style={{background:'#f8f9fa',borderRadius:8,padding:16,textAlign:'center'}}>
+                    <div style={{fontSize:11,color:'#5f6368'}}>Market Mid-Point</div>
+                    <div style={{fontSize:18,fontWeight:700}}>{priceCheck.marketRate?.mid ? `$${Number(priceCheck.marketRate.mid).toLocaleString()}` : '-'}</div>
+                  </div>
+                  <div style={{background:'#f8f9fa',borderRadius:8,padding:16,textAlign:'center'}}>
+                    <div style={{fontSize:11,color:'#5f6368'}}>Confidence</div>
+                    <div style={{fontSize:18,fontWeight:700}}>{priceCheck.confidence || '-'}%</div>
+                  </div>
+                </div>
+                {priceCheck.marketRate && (
+                  <div style={{background:'#e8f0fe',borderRadius:8,padding:16,marginBottom:16}}>
+                    <strong style={{fontSize:14}}>Market Rate Range</strong>
+                    <div style={{display:'flex',gap:24,marginTop:8,fontSize:13}}>
+                      <span>Low: <strong>${Number(priceCheck.marketRate.low||0).toLocaleString()}</strong></span>
+                      <span>Mid: <strong>${Number(priceCheck.marketRate.mid||0).toLocaleString()}</strong></span>
+                      <span>High: <strong>${Number(priceCheck.marketRate.high||0).toLocaleString()}</strong></span>
+                    </div>
+                  </div>
+                )}
+                {priceCheck.flags?.length > 0 && (
+                  <div style={{marginBottom:16}}>
+                    <strong style={{fontSize:14}}>Pricing Flags</strong>
+                    {priceCheck.flags.map((f,i) => (
+                      <div key={i} style={{background: f.severity==='high'?'#fce8e6':'#fef7e0',borderRadius:8,padding:12,marginTop:8,border:`1px solid ${f.severity==='high'?'#f44336':'#ff9800'}`}}>
+                        <div style={{display:'flex',justifyContent:'space-between'}}>
+                          <strong style={{fontSize:13}}>{f.issue}</strong>
+                          <span className={`status-badge ${f.severity}`}>{f.severity}</span>
+                        </div>
+                        {f.detail && <div style={{fontSize:12,marginTop:4}}>{f.detail}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {priceCheck.recommendations?.length > 0 && (
+                  <div style={{background:'#f8f9fa',borderRadius:8,padding:16,border:'1px solid #e0e0e0'}}>
+                    <strong style={{fontSize:14}}>Recommendations</strong>
+                    {priceCheck.recommendations.map((r,i) => (
+                      <div key={i} style={{fontSize:13,marginTop:8,display:'flex',gap:8}}>
+                        <span style={{color:'#1a73e8'}}>•</span>{r}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {priceCheck.analysis && (
+                  <div style={{background:'#f8f9fa',borderRadius:8,padding:16,marginTop:16,border:'1px solid #e0e0e0'}}>
+                    <strong style={{fontSize:14}}>Analysis Narrative</strong>
+                    <p style={{fontSize:13,marginTop:8,lineHeight:1.6}}>{priceCheck.analysis}</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Contract Generator Tab */}
+        {activeTab === 'contract' && (
+          <div>
+            <h3 style={{marginBottom:16}}>Contract Generator</h3>
+            {contractLoading && <div style={{textAlign:'center',padding:32}}>AI is generating your contract...</div>}
+            {!contractLoading && !contract && (
+              <div style={{textAlign:'center',padding:32,color:'#5f6368'}}>Click "Generate Contract" to transform this proposal into a formal contract with IP clauses, liability limitations, and payment terms.</div>
+            )}
+            {!contractLoading && contract && (
+              <div>
+                <div style={{background:'#e8f0fe',borderRadius:8,padding:16,marginBottom:16}}>
+                  <strong>{contract.contractTitle || 'Service Agreement'}</strong>
+                  <div style={{fontSize:13,marginTop:4}}>Effective: {contract.effectiveDate || 'Upon signature'}</div>
+                  {contract.governingLaw && <div style={{fontSize:13,marginTop:4}}>Governing Law: {contract.governingLaw}</div>}
+                </div>
+                {[
+                  ['Scope', contract.scope],
+                  ['Deliverables', contract.deliverables],
+                  ['Payment Terms', contract.paymentTerms],
+                  ['IP Clauses', contract.ipClauses],
+                  ['Liability Limitations', contract.liabilityLimitations],
+                  ['Confidentiality', contract.confidentiality],
+                  ['Termination', contract.termination],
+                  ['Dispute Resolution', contract.disputeResolution],
+                ].filter(([,v]) => v).map(([label, value]) => (
+                  <div key={label} style={{marginBottom:12,padding:12,background:'#f8f9fa',borderRadius:8,border:'1px solid #e0e0e0'}}>
+                    <strong style={{fontSize:13,color:'#1a73e8'}}>{label}</strong>
+                    <p style={{fontSize:13,marginTop:6,lineHeight:1.6}}>{value}</p>
+                  </div>
+                ))}
+                {contract.fullContractText && (
+                  <div style={{marginTop:16}}>
+                    <strong style={{fontSize:14}}>Full Contract Text</strong>
+                    <pre style={{background:'#f8f9fa',padding:16,borderRadius:8,fontSize:12,lineHeight:1.6,whiteSpace:'pre-wrap',marginTop:8,border:'1px solid #e0e0e0',maxHeight:500,overflow:'auto'}}>{contract.fullContractText}</pre>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
-    )}
-  />
-);
+    </div>
+  );
+};
 
 // SOW Form
 const SOWForm = ({ item, onSave, onCancel }) => {
@@ -1419,32 +1810,201 @@ const SOWList = () => (
 );
 
 // SOW Detail
-const SOWDetail = () => (
-  <DetailView
-    endpoint="sows"
-    title="SOW"
-    renderContent={(item) => (
+// Enhanced SOW Detail with Export PDF
+const SOWDetail = () => {
+  const { id } = useParams();
+  const [item, setItem] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('details');
+  const navigate = useNavigate();
+  const toast = useToast();
+
+  useEffect(() => {
+    axios.get(`${API_URL}/sows/${id}`)
+      .then(res => setItem(res.data))
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [id]);
+
+  const handleExportPdf = async () => {
+    setPdfLoading(true);
+    try {
+      const res = await axios.get(`${API_URL}/sows/${id}/export-pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `sow-${id}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('SOW PDF exported successfully');
+    } catch (err) {
+      toast.error('Failed to export PDF');
+    }
+    setPdfLoading(false);
+  };
+
+  if (loading) return <div className="loading"><div className="spinner"></div>Loading...</div>;
+  if (!item) return <div className="empty-state"><h3>SOW not found</h3></div>;
+
+  const tabs = [
+    { key: 'details', label: 'Details' },
+    { key: 'scope', label: 'Scope & Deliverables' },
+    { key: 'timeline', label: 'Timeline & Milestones' },
+    { key: 'governance', label: 'Governance' },
+  ];
+
+  return (
+    <div>
+      <button className="btn btn-ghost" onClick={() => navigate(-1)} style={{ marginBottom: 16 }}>
+        <ArrowLeft size={18} /> Back
+      </button>
       <div className="detail-container">
-        <div className="detail-header">
+        <div className="detail-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
           <div>
             <h1 className="detail-title">{item.title}</h1>
             <div className="detail-meta">
               <span className={`status-badge ${item.status}`}>{item.status}</span>
+              {item.version && <span>v{item.version}</span>}
               <span>${(item.total_amount || 0).toLocaleString()}</span>
+              {item.signed_at && <span style={{ color: '#0d904f', fontWeight: 600 }}>Signed {new Date(item.signed_at).toLocaleDateString()}</span>}
             </div>
           </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn btn-secondary btn-sm" onClick={handleExportPdf} disabled={pdfLoading}>
+              <Download size={14} /> {pdfLoading ? 'Exporting...' : 'Export PDF'}
+            </button>
+          </div>
         </div>
+
+        {/* Tab Navigation */}
+        <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid #e0e0e0', marginBottom: 24, marginTop: 16 }}>
+          {tabs.map(t => (
+            <button key={t.key} onClick={() => setActiveTab(t.key)} style={{
+              padding: '10px 20px', border: 'none', background: 'none', cursor: 'pointer',
+              fontWeight: activeTab === t.key ? 700 : 400,
+              color: activeTab === t.key ? '#1a73e8' : '#5f6368',
+              borderBottom: activeTab === t.key ? '2px solid #1a73e8' : '2px solid transparent',
+              marginBottom: -2, fontSize: 14
+            }}>{t.label}</button>
+          ))}
+        </div>
+
         <div className="detail-body">
-          {item.introduction && (<div className="detail-section"><h3 className="detail-section-title">Introduction</h3><p>{item.introduction}</p></div>)}
-          {item.objectives && (<div className="detail-section"><h3 className="detail-section-title">Objectives</h3><p>{item.objectives}</p></div>)}
-          {item.scope && (<div className="detail-section"><h3 className="detail-section-title">Scope</h3><p>{item.scope}</p></div>)}
-          {item.deliverables && (<div className="detail-section"><h3 className="detail-section-title">Deliverables</h3><p>{item.deliverables}</p></div>)}
-          {item.milestones && (<div className="detail-section"><h3 className="detail-section-title">Milestones</h3><p>{item.milestones}</p></div>)}
+          {activeTab === 'details' && (
+            <>
+              <div className="detail-section">
+                <h3 className="detail-section-title">Overview</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
+                  {[
+                    ['Title', item.title],
+                    ['Status', item.status],
+                    ['Version', item.version ? `v${item.version}` : '-'],
+                    ['Total Amount', `$${(item.total_amount || 0).toLocaleString()}`],
+                    ['Signed At', item.signed_at ? new Date(item.signed_at).toLocaleDateString() : 'Not signed'],
+                    ['Created At', item.created_at ? new Date(item.created_at).toLocaleDateString() : '-'],
+                  ].map(([label, value]) => (
+                    <div key={label} style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: '#9aa0a6', textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
+                      <div style={{ fontWeight: 500 }}>{value || '-'}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {item.introduction && (
+                <div className="detail-section">
+                  <h3 className="detail-section-title">Introduction</h3>
+                  <MarkdownText content={item.introduction} />
+                </div>
+              )}
+              {item.objectives && (
+                <div className="detail-section">
+                  <h3 className="detail-section-title">Objectives</h3>
+                  <MarkdownText content={item.objectives} />
+                </div>
+              )}
+            </>
+          )}
+
+          {activeTab === 'scope' && (
+            <>
+              {item.scope && (
+                <div className="detail-section">
+                  <h3 className="detail-section-title">Scope of Work</h3>
+                  <MarkdownText content={item.scope} />
+                </div>
+              )}
+              {item.deliverables && (
+                <div className="detail-section">
+                  <h3 className="detail-section-title">Deliverables</h3>
+                  <MarkdownText content={item.deliverables} />
+                </div>
+              )}
+              {item.assumptions && (
+                <div className="detail-section">
+                  <h3 className="detail-section-title">Assumptions</h3>
+                  <MarkdownText content={item.assumptions} />
+                </div>
+              )}
+              {item.constraints && (
+                <div className="detail-section">
+                  <h3 className="detail-section-title">Constraints</h3>
+                  <MarkdownText content={item.constraints} />
+                </div>
+              )}
+              {item.acceptance_criteria && (
+                <div className="detail-section">
+                  <h3 className="detail-section-title">Acceptance Criteria</h3>
+                  <MarkdownText content={item.acceptance_criteria} />
+                </div>
+              )}
+            </>
+          )}
+
+          {activeTab === 'timeline' && (
+            <>
+              {item.timeline && (
+                <div className="detail-section">
+                  <h3 className="detail-section-title">Timeline</h3>
+                  <MarkdownText content={item.timeline} />
+                </div>
+              )}
+              {item.milestones && (
+                <div className="detail-section">
+                  <h3 className="detail-section-title">Milestones</h3>
+                  <MarkdownText content={item.milestones} />
+                </div>
+              )}
+            </>
+          )}
+
+          {activeTab === 'governance' && (
+            <>
+              {item.payment_terms && (
+                <div className="detail-section">
+                  <h3 className="detail-section-title">Payment Terms</h3>
+                  <MarkdownText content={item.payment_terms} />
+                </div>
+              )}
+              {item.change_management && (
+                <div className="detail-section">
+                  <h3 className="detail-section-title">Change Management</h3>
+                  <MarkdownText content={item.change_management} />
+                </div>
+              )}
+              {item.governance && (
+                <div className="detail-section">
+                  <h3 className="detail-section-title">Governance</h3>
+                  <MarkdownText content={item.governance} />
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
-    )}
-  />
-);
+    </div>
+  );
+};
 
 // Service Form
 const ServiceForm = ({ item, onSave, onCancel }) => {
@@ -1981,6 +2541,13 @@ const AIGenerator = () => {
   const [output, setOutput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // Improve Text — POSTs to /api/ai/improve-text. Operates on the current output OR
+  // user-pasted text; result replaces the output area so it can be copied like other AI runs.
+  const [improveStyle, setImproveStyle] = useState('professional');
+  const [improving, setImproving] = useState(false);
+  const [improveError, setImproveError] = useState('');
+  const [pasteText, setPasteText] = useState('');
+  const [showPaste, setShowPaste] = useState(false);
 
   const sampleProjects = [
     {
@@ -2053,6 +2620,32 @@ const AIGenerator = () => {
       setError(err.response?.data?.error || 'Generation failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const improveText = async (sourceText) => {
+    const text = (sourceText ?? output ?? '').trim();
+    if (!text) {
+      setImproveError('No text to improve. Generate or paste content first.');
+      return;
+    }
+    setImproving(true);
+    setImproveError('');
+    try {
+      const res = await axios.post(`${API_URL}/ai/improve-text`, { text, style: improveStyle });
+      setOutput(res.data.content);
+      setShowPaste(false);
+      setPasteText('');
+    } catch (err) {
+      const msg = err.response?.data?.error || err.message || 'Improve failed';
+      // Backend throws if OPENROUTER_API_KEY missing — surface that explicitly.
+      if (/api key/i.test(msg) || err.response?.status === 503) {
+        setImproveError('AI not configured (503). Set OPENROUTER_API_KEY in backend .env.');
+      } else {
+        setImproveError(msg);
+      }
+    } finally {
+      setImproving(false);
     }
   };
 
@@ -2130,6 +2723,64 @@ const AIGenerator = () => {
             </div>
           </>
         )}
+
+        {/* Improve Text — POSTs current output (or pasted text) to /api/ai/improve-text */}
+        <div className="ai-improve" style={{ marginTop: 24, padding: 16, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafafa' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <Sparkles size={18} />
+            <strong>Improve Text</strong>
+            <span style={{ color: '#6b7280', fontSize: 13 }}>
+              Rewrite the output above (or your own text) in a chosen voice.
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+            <label className="form-label" style={{ marginBottom: 0 }}>Style</label>
+            <select className="form-select" style={{ maxWidth: 220 }} value={improveStyle} onChange={(e) => setImproveStyle(e.target.value)}>
+              <option value="professional">Professional</option>
+              <option value="concise">Concise (40–60% shorter)</option>
+              <option value="persuasive">Persuasive</option>
+              <option value="technical">Technical</option>
+              <option value="friendly">Friendly</option>
+            </select>
+            <button
+              className="btn btn-primary"
+              onClick={() => improveText()}
+              disabled={improving || !output.trim()}
+              title={!output.trim() ? 'Generate or paste text first' : 'Improve current output in place'}
+            >
+              <Wand2 size={16} /> {improving ? 'Improving...' : 'Improve Output'}
+            </button>
+            <button
+              className="btn btn-secondary"
+              onClick={() => setShowPaste((v) => !v)}
+              type="button"
+            >
+              <Edit size={16} /> {showPaste ? 'Hide Paste' : 'Improve Pasted Text'}
+            </button>
+          </div>
+          {showPaste && (
+            <div style={{ marginTop: 12 }}>
+              <textarea
+                className="form-textarea"
+                rows={4}
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+                placeholder="Paste any draft text to rewrite (replaces output area on success)…"
+              />
+              <button
+                className="btn btn-primary"
+                style={{ marginTop: 8 }}
+                onClick={() => improveText(pasteText)}
+                disabled={improving || !pasteText.trim()}
+              >
+                <Wand2 size={16} /> {improving ? 'Improving...' : 'Improve Pasted Text'}
+              </button>
+            </div>
+          )}
+          {improveError && (
+            <div className="alert alert-error" style={{ marginTop: 12 }}>{improveError}</div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -3469,6 +4120,435 @@ const ProfilePage = () => {
   );
 };
 
+// ============ Proposal Templates Page ============
+const ProposalTemplatesPage = () => {
+  const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [showForm, setShowForm] = useState(false);
+  const [editItem, setEditItem] = useState(null);
+  const [form, setForm] = useState({ name: '', type: 'proposal', description: '', sections: '', variables: '' });
+  const [saving, setSaving] = useState(false);
+  const [useTemplate, setUseTemplate] = useState(null);
+  const [mergeVars, setMergeVars] = useState({});
+  const [mergeLoading, setMergeLoading] = useState(false);
+  const toast = useToast();
+  const confirm = useConfirm();
+  const navigate = useNavigate();
+  const limit = 20;
+
+  const load = useCallback(() => {
+    setLoading(true);
+    axios.get(`${API_URL}/proposal-templates?page=${page}&limit=${limit}`)
+      .then(res => {
+        const d = res.data;
+        setTemplates(d.data || d || []);
+        setTotal(d.pagination?.total || d.total || 0);
+        setTotalPages(d.pagination?.totalPages || d.totalPages || 1);
+      })
+      .catch(() => toast.error('Failed to load templates'))
+      .finally(() => setLoading(false));
+  }, [page]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const payload = {
+        ...form,
+        sections: form.sections ? JSON.parse(form.sections) : [],
+        variables: form.variables ? JSON.parse(form.variables) : {},
+      };
+      if (editItem) {
+        await axios.put(`${API_URL}/proposal-templates/${editItem.id}`, payload);
+        toast.success('Template updated');
+      } else {
+        await axios.post(`${API_URL}/proposal-templates`, payload);
+        toast.success('Template created');
+      }
+      setShowForm(false);
+      setEditItem(null);
+      setForm({ name: '', type: 'proposal', description: '', sections: '', variables: '' });
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save template');
+    }
+    setSaving(false);
+  };
+
+  const handleEdit = (t) => {
+    setEditItem(t);
+    setForm({
+      name: t.name || '',
+      type: t.type || 'proposal',
+      description: t.description || '',
+      sections: t.sections ? JSON.stringify(t.sections, null, 2) : '',
+      variables: t.variables ? JSON.stringify(t.variables, null, 2) : '',
+    });
+    setShowForm(true);
+  };
+
+  const handleDelete = async (id) => {
+    const ok = await confirm('Delete this template?', { title: 'Delete Template', variant: 'danger' });
+    if (!ok) return;
+    try {
+      await axios.delete(`${API_URL}/proposal-templates/${id}`);
+      toast.success('Template deleted');
+      load();
+    } catch {
+      toast.error('Failed to delete');
+    }
+  };
+
+  const handleUseTemplate = async (t) => {
+    setUseTemplate(t);
+    // Pre-populate merge vars from template variables definition
+    const vars = t.variables || {};
+    const initial = {};
+    Object.keys(vars).forEach(k => { initial[k] = vars[k]?.default || ''; });
+    setMergeVars(initial);
+  };
+
+  const handleMerge = async (e) => {
+    e.preventDefault();
+    setMergeLoading(true);
+    try {
+      const res = await axios.post(`${API_URL}/proposals/from-template`, {
+        templateId: useTemplate.id,
+        variables: mergeVars,
+      });
+      toast.success('Proposal created from template!');
+      setUseTemplate(null);
+      navigate(`/proposals/${res.data.id}`);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to create proposal');
+    }
+    setMergeLoading(false);
+  };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Proposal Templates</h1>
+          <p className="page-subtitle">Reusable proposal templates with merge variables ({total} total)</p>
+        </div>
+        <button className="btn btn-primary" onClick={() => { setEditItem(null); setForm({ name: '', type: 'proposal', description: '', sections: '', variables: '' }); setShowForm(true); }}>
+          <Plus size={18} /> New Template
+        </button>
+      </div>
+
+      {loading ? (
+        <TableSkeleton rows={5} cols={4} />
+      ) : templates.length === 0 ? (
+        <div className="empty-state">
+          <FileText size={48} />
+          <h3>No templates yet</h3>
+          <p>Create your first proposal template to speed up your workflow.</p>
+        </div>
+      ) : (
+        <div className="table-container">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Description</th>
+                <th>Usage Count</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {templates.map(t => (
+                <tr key={t.id}>
+                  <td><strong>{t.name}</strong></td>
+                  <td><span className="status-badge">{t.type}</span></td>
+                  <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.description || '-'}</td>
+                  <td>{t.usage_count || 0}</td>
+                  <td><span className={`status-badge ${t.status}`}>{t.status}</span></td>
+                  <td>
+                    <button className="btn btn-primary btn-sm" onClick={() => handleUseTemplate(t)} style={{ marginRight: 4 }}>
+                      <Wand2 size={14} /> Use Template
+                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => handleEdit(t)} style={{ marginRight: 4 }}>
+                      <Edit size={14} />
+                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => handleDelete(t.id)}>
+                      <Trash2 size={14} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <PaginationControls page={page} totalPages={totalPages} total={total} limit={limit}
+            onPageChange={setPage} onLimitChange={() => {}} />
+        </div>
+      )}
+
+      {/* Create/Edit Template Modal */}
+      {showForm && (
+        <div className="modal-overlay" onClick={() => setShowForm(false)}>
+          <div className="modal" style={{ maxWidth: 700 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title">{editItem ? 'Edit Template' : 'New Template'}</h2>
+              <button className="modal-close" onClick={() => setShowForm(false)}><X size={20} /></button>
+            </div>
+            <form onSubmit={handleSave}>
+              <div className="modal-body">
+                <div className="form-grid">
+                  <div className="form-group full-width">
+                    <label className="form-label">Template Name *</label>
+                    <input className="form-input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required placeholder="e.g., Standard Web Development Proposal" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Type</label>
+                    <select className="form-select" value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+                      <option value="proposal">Proposal</option>
+                      <option value="sow">SOW</option>
+                      <option value="contract">Contract</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Description</label>
+                    <input className="form-input" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Brief description" />
+                  </div>
+                  <div className="form-group full-width">
+                    <label className="form-label">Sections (JSON array)</label>
+                    <textarea className="form-textarea" rows={6} value={form.sections} onChange={e => setForm({ ...form, sections: e.target.value })}
+                      placeholder='[{"title": "Executive Summary", "content": "{{executive_summary}}"}, ...]' />
+                    <small style={{ color: '#9aa0a6' }}>JSON array of section objects with title and content fields. Use {"{{variable_name}}"} for merge variables.</small>
+                  </div>
+                  <div className="form-group full-width">
+                    <label className="form-label">Variables (JSON object)</label>
+                    <textarea className="form-textarea" rows={4} value={form.variables} onChange={e => setForm({ ...form, variables: e.target.value })}
+                      placeholder='{"client_name": {"label": "Client Name", "default": ""}, "project_scope": {"label": "Project Scope"}}' />
+                    <small style={{ color: '#9aa0a6' }}>Define variables used in sections. Each key maps to its label and optional default value.</small>
+                  </div>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving...' : 'Save Template'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Use Template / Merge Variables Modal */}
+      {useTemplate && (
+        <div className="modal-overlay" onClick={() => setUseTemplate(null)}>
+          <div className="modal" style={{ maxWidth: 600 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title">Create Proposal from Template</h2>
+              <button className="modal-close" onClick={() => setUseTemplate(null)}><X size={20} /></button>
+            </div>
+            <form onSubmit={handleMerge}>
+              <div className="modal-body">
+                <div style={{ background: '#f8f9fa', padding: 12, borderRadius: 8, marginBottom: 16 }}>
+                  <strong>{useTemplate.name}</strong>
+                  {useTemplate.description && <p style={{ margin: '4px 0 0', color: '#5f6368', fontSize: 13 }}>{useTemplate.description}</p>}
+                </div>
+                {Object.keys(useTemplate.variables || {}).length === 0 ? (
+                  <div className="empty-state" style={{ padding: 24 }}>
+                    <p>This template has no variables. A proposal will be created with the template content as-is.</p>
+                  </div>
+                ) : (
+                  Object.entries(useTemplate.variables || {}).map(([key, meta]) => (
+                    <div className="form-group" key={key}>
+                      <label className="form-label">{meta.label || key}</label>
+                      <textarea className="form-textarea" rows={3} value={mergeVars[key] || ''}
+                        onChange={e => setMergeVars({ ...mergeVars, [key]: e.target.value })}
+                        placeholder={`Enter ${meta.label || key}...`} />
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setUseTemplate(null)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={mergeLoading}>
+                  <Wand2 size={14} /> {mergeLoading ? 'Creating...' : 'Create Proposal'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ============ Public Client Portal Page ============
+const PublicPortalPage = () => {
+  const { token } = useParams();
+  const [proposal, setProposal] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [approving, setApproving] = useState(false);
+  const [approverName, setApproverName] = useState('');
+  const [approved, setApproved] = useState(false);
+
+  useEffect(() => {
+    axios.get(`${API_URL}/public/proposals/${token}`)
+      .then(res => setProposal(res.data))
+      .catch(err => setError(err.response?.data?.error || 'Proposal not found or link expired'))
+      .finally(() => setLoading(false));
+  }, [token]);
+
+  const handleApprove = async (e) => {
+    e.preventDefault();
+    setApproving(true);
+    try {
+      await axios.post(`${API_URL}/public/proposals/${token}/approve`, { approverName });
+      setApproved(true);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Approval failed');
+    }
+    setApproving(false);
+  };
+
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: '#f8f9fa' }}>
+      <div style={{ textAlign: 'center' }}>
+        <div className="spinner" style={{ margin: '0 auto 16px' }}></div>
+        <p style={{ color: '#5f6368' }}>Loading proposal...</p>
+      </div>
+    </div>
+  );
+
+  if (error) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: '#f8f9fa' }}>
+      <div style={{ textAlign: 'center', maxWidth: 400 }}>
+        <XCircle size={64} style={{ color: '#d93025', marginBottom: 16 }} />
+        <h2 style={{ marginBottom: 8 }}>Proposal Unavailable</h2>
+        <p style={{ color: '#5f6368' }}>{error}</p>
+      </div>
+    </div>
+  );
+
+  if (approved || proposal?.portal_approved_at) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: '#f8f9fa' }}>
+      <div style={{ textAlign: 'center', maxWidth: 500, padding: 40, background: '#fff', borderRadius: 16, boxShadow: '0 4px 24px rgba(0,0,0,0.12)' }}>
+        <CheckCircle size={64} style={{ color: '#0d904f', marginBottom: 16 }} />
+        <h2 style={{ marginBottom: 8 }}>Proposal Approved!</h2>
+        <p style={{ color: '#5f6368', marginBottom: 8 }}>Thank you for approving this proposal. Our team will be in touch shortly.</p>
+        {proposal?.portal_approved_by && <p style={{ color: '#9aa0a6', fontSize: 13 }}>Approved by: {proposal.portal_approved_by}</p>}
+        {proposal?.portal_approved_at && <p style={{ color: '#9aa0a6', fontSize: 13 }}>Approved on: {new Date(proposal.portal_approved_at).toLocaleDateString()}</p>}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ background: '#f8f9fa', minHeight: '100vh', padding: '32px 16px' }}>
+      <div style={{ maxWidth: 800, margin: '0 auto' }}>
+        {/* Header */}
+        <div style={{ background: '#1a73e8', color: '#fff', borderRadius: '16px 16px 0 0', padding: '32px 40px' }}>
+          <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 2, marginBottom: 8, opacity: 0.8 }}>Proposal</div>
+          <h1 style={{ margin: 0, fontSize: 28, fontWeight: 700 }}>{proposal.title}</h1>
+          {proposal.valid_until && (
+            <div style={{ marginTop: 12, fontSize: 14, opacity: 0.85 }}>
+              Valid until: {new Date(proposal.valid_until).toLocaleDateString()}
+            </div>
+          )}
+        </div>
+
+        {/* Body */}
+        <div style={{ background: '#fff', padding: '32px 40px', borderRadius: '0 0 16px 16px', boxShadow: '0 4px 24px rgba(0,0,0,0.08)' }}>
+          {/* Amount */}
+          {proposal.total_amount && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 32, padding: '16px 20px', background: '#f0f7ff', borderRadius: 12, border: '1px solid #1a73e8' }}>
+              <DollarSign size={24} style={{ color: '#1a73e8' }} />
+              <div>
+                <div style={{ fontSize: 11, color: '#5f6368', textTransform: 'uppercase', letterSpacing: 1 }}>Total Amount</div>
+                <div style={{ fontSize: 28, fontWeight: 700, color: '#1a73e8' }}>${Number(proposal.total_amount).toLocaleString()}</div>
+              </div>
+            </div>
+          )}
+
+          {/* Status */}
+          <div style={{ marginBottom: 24 }}>
+            <span className={`status-badge ${proposal.status}`}>{proposal.status}</span>
+          </div>
+
+          {/* Sections */}
+          {proposal.executive_summary && (
+            <div style={{ marginBottom: 24 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12, color: '#1a1a1a', borderBottom: '2px solid #e0e0e0', paddingBottom: 8 }}>Executive Summary</h3>
+              <div style={{ color: '#333', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{proposal.executive_summary}</div>
+            </div>
+          )}
+
+          {proposal.scope_of_work && (
+            <div style={{ marginBottom: 24 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12, color: '#1a1a1a', borderBottom: '2px solid #e0e0e0', paddingBottom: 8 }}>Scope of Work</h3>
+              <div style={{ color: '#333', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{proposal.scope_of_work}</div>
+            </div>
+          )}
+
+          {proposal.deliverables && (
+            <div style={{ marginBottom: 24 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12, color: '#1a1a1a', borderBottom: '2px solid #e0e0e0', paddingBottom: 8 }}>Deliverables</h3>
+              <div style={{ color: '#333', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{proposal.deliverables}</div>
+            </div>
+          )}
+
+          {proposal.timeline && (
+            <div style={{ marginBottom: 24 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12, color: '#1a1a1a', borderBottom: '2px solid #e0e0e0', paddingBottom: 8 }}>Timeline</h3>
+              <div style={{ color: '#333', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{proposal.timeline}</div>
+            </div>
+          )}
+
+          {proposal.pricing_summary && (
+            <div style={{ marginBottom: 24 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12, color: '#1a1a1a', borderBottom: '2px solid #e0e0e0', paddingBottom: 8 }}>Pricing Summary</h3>
+              <div style={{ color: '#333', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{proposal.pricing_summary}</div>
+            </div>
+          )}
+
+          {proposal.terms_conditions && (
+            <div style={{ marginBottom: 32 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12, color: '#1a1a1a', borderBottom: '2px solid #e0e0e0', paddingBottom: 8 }}>Terms & Conditions</h3>
+              <div style={{ color: '#666', lineHeight: 1.7, fontSize: 13, whiteSpace: 'pre-wrap' }}>{proposal.terms_conditions}</div>
+            </div>
+          )}
+
+          {/* Approval Form */}
+          {proposal.status !== 'accepted' && (
+            <div style={{ background: '#f0f7ff', border: '2px solid #1a73e8', borderRadius: 12, padding: 24 }}>
+              <h3 style={{ margin: '0 0 16px', color: '#1a73e8', fontSize: 18 }}>Approve This Proposal</h3>
+              <p style={{ color: '#5f6368', marginBottom: 16, fontSize: 14 }}>
+                By approving, you confirm acceptance of the terms and conditions outlined above.
+              </p>
+              <form onSubmit={handleApprove}>
+                <div className="form-group" style={{ marginBottom: 16 }}>
+                  <label className="form-label">Your Name *</label>
+                  <input className="form-input" value={approverName} onChange={e => setApproverName(e.target.value)}
+                    placeholder="Enter your full name" required />
+                </div>
+                <button type="submit" className="btn btn-primary" disabled={approving} style={{ width: '100%', padding: '14px', fontSize: 16 }}>
+                  <CheckCircle size={18} /> {approving ? 'Processing...' : 'I Approve This Proposal'}
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{ textAlign: 'center', marginTop: 24, color: '#9aa0a6', fontSize: 13 }}>
+          Powered by ProposalGen AI
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Protected Route
 const ProtectedRoute = ({ children, roles }) => {
   const { user } = useAuth();
@@ -3492,6 +4572,7 @@ const App = () => {
               <Route path="/login" element={<LoginPage />} />
               <Route path="/forgot-password" element={<ForgotPasswordPage />} />
               <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
+              <Route path="/portal/proposals/:token" element={<PublicPortalPage />} />
               <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
               <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
               <Route path="/clients" element={<ProtectedRoute><ClientList /></ProtectedRoute>} />
@@ -3508,6 +4589,7 @@ const App = () => {
               <Route path="/pricing/:id" element={<ProtectedRoute><PricingDetail /></ProtectedRoute>} />
               <Route path="/templates" element={<ProtectedRoute><TemplateList /></ProtectedRoute>} />
               <Route path="/templates/:id" element={<ProtectedRoute><TemplateDetail /></ProtectedRoute>} />
+              <Route path="/proposal-templates" element={<ProtectedRoute><ProposalTemplatesPage /></ProtectedRoute>} />
               <Route path="/team" element={<ProtectedRoute roles={['admin', 'manager']}><TeamList /></ProtectedRoute>} />
               <Route path="/team/:id" element={<ProtectedRoute roles={['admin', 'manager']}><TeamDetail /></ProtectedRoute>} />
               <Route path="/ai-generator" element={<ProtectedRoute><AIGenerator /></ProtectedRoute>} />
@@ -3520,6 +4602,26 @@ const App = () => {
               <Route path="/documents/:id" element={<ProtectedRoute><DocumentDetail /></ProtectedRoute>} />
               <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
               <Route path="/settings" element={<ProtectedRoute roles={['admin']}><SettingsList /></ProtectedRoute>} />
+          // === Batch 07 Gaps & Frontend Mounts ===
+          <Route path='/cf-multisection-sow-generation' element={<CfMultisectionSowGeneration />} />
+          <Route path='/cf-proposal-template-library' element={<CfProposalTemplateLibrary />} />
+          <Route path='/cf-pricing-intelligence' element={<CfPricingIntelligence />} />
+          <Route path='/cf-risk-allocation' element={<CfRiskAllocation />} />
+          <Route path='/cf-contract-clause-recommender' element={<CfContractClauseRecommender />} />
+          <Route path='/cf-postsignature-tracking' element={<CfPostsignatureTracking />} />
+          <Route path='/gap-no-ai-sow-generation-endpoint' element={<GapNoAiSowGenerationEndpoint />} />
+          <Route path='/gap-no-ai-proposalfrombrief-generation' element={<GapNoAiProposalfrombriefGeneration />} />
+          <Route path='/gap-no-ai-clauseterm-recommendation' element={<GapNoAiClausetermRecommendation />} />
+          <Route path='/gap-no-ai-pricing-intelligence' element={<GapNoAiPricingIntelligence />} />
+          <Route path='/gap-no-ai-risk-allocation-generation' element={<GapNoAiRiskAllocationGeneration />} />
+          <Route path='/gap-no-client-project-or-proposal-crud' element={<GapNoClientProjectOrProposalCrud />} />
+          <Route path='/gap-no-template-library-or-section-snippets' element={<GapNoTemplateLibraryOrSectionSnippets />} />
+          <Route path='/gap-no-pricingratecard-management' element={<GapNoPricingratecardManagement />} />
+          <Route path='/gap-no-pdf-export-route-codebase-imports-pdf-lib' element={<GapNoPdfExportRouteCodebaseImportsPdfLib />} />
+          <Route path='/gap-no-esignature-workflow' element={<GapNoEsignatureWorkflow />} />
+          <Route path='/gap-no-changeorder-tracking' element={<GapNoChangeorderTracking />} />
+          <Route path='/gap-no-notifications-audit-log-or-rbac' element={<GapNoNotificationsAuditLogOrRbac />} />
+          // === End Batch 07 ===
             </Routes>
           </AuthProvider>
         </ConfirmProvider>
