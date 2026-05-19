@@ -21,6 +21,7 @@ import GapNoPdfExportRouteCodebaseImportsPdfLib from './pages/GapNoPdfExportRout
 import GapNoEsignatureWorkflow from './pages/GapNoEsignatureWorkflow';
 import GapNoChangeorderTracking from './pages/GapNoChangeorderTracking';
 import GapNoNotificationsAuditLogOrRbac from './pages/GapNoNotificationsAuditLogOrRbac';
+import CustomViewsPage from './pages/CustomViewsPage';
 // === End Batch 07 ===
 
 import {
@@ -32,7 +33,7 @@ import {
   Menu, Download, Printer, ChevronDown, ChevronUp
 } from 'lucide-react';
 
-const API_URL = 'http://localhost:5001/api';
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
 
 // Lightweight markdown-to-HTML renderer for AI text content
 function renderMarkdown(text) {
@@ -571,6 +572,7 @@ const Sidebar = ({ onNavigate, isOpen }) => {
     { section: 'Analytics', items: [
       { icon: Files, label: 'Documents', path: '/documents' },
       { icon: BarChart3, label: 'Analytics', path: '/analytics' },
+      { icon: BarChart3, label: 'Proposal Views', path: '/custom-views' },
     ]},
     { section: 'System', items: [
       { icon: UserCircle, label: 'Profile', path: '/profile' },
@@ -4602,6 +4604,7 @@ const App = () => {
               <Route path="/documents/:id" element={<ProtectedRoute><DocumentDetail /></ProtectedRoute>} />
               <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
               <Route path="/settings" element={<ProtectedRoute roles={['admin']}><SettingsList /></ProtectedRoute>} />
+              <Route path="/custom-views" element={<ProtectedRoute><CustomViewsPage /></ProtectedRoute>} />
           // === Batch 07 Gaps & Frontend Mounts ===
           <Route path='/cf-multisection-sow-generation' element={<CfMultisectionSowGeneration />} />
           <Route path='/cf-proposal-template-library' element={<CfProposalTemplateLibrary />} />

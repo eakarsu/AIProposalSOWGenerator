@@ -1759,6 +1759,9 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// ============ CUSTOM VIEWS (mounted BEFORE 404 / app.listen) ============
+app.use('/api/custom-views', require('./routes/customViews'));
+
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
