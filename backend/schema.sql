@@ -382,6 +382,59 @@ CREATE TABLE IF NOT EXISTS risk_sections (
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(255);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMP;
 
+-- Add public_token column to proposals for client portal
+ALTER TABLE proposals ADD COLUMN IF NOT EXISTS public_token VARCHAR(255) UNIQUE;
+ALTER TABLE proposals ADD COLUMN IF NOT EXISTS portal_approved_at TIMESTAMP;
+ALTER TABLE proposals ADD COLUMN IF NOT EXISTS portal_approved_by VARCHAR(255);
+
+-- AI Results table (persist every AI call)
+CREATE TABLE IF NOT EXISTS ai_results (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    endpoint VARCHAR(100),
+    entity_type VARCHAR(50),
+    entity_id INTEGER,
+    model VARCHAR(100),
+    prompt TEXT,
+    raw_response TEXT,
+    parsed_json JSONB,
+    tokens_used INTEGER,
+    status VARCHAR(20) DEFAULT 'success',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Proposal Templates table (template merge engine)
+CREATE TABLE IF NOT EXISTS proposal_templates (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    type VARCHAR(50) DEFAULT 'proposal',
+    description TEXT,
+    sections JSONB,
+    variables JSONB,
+    is_default BOOLEAN DEFAULT FALSE,
+    usage_count INTEGER DEFAULT 0,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    status VARCHAR(50) DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Proposal Revisions table (revision tracking)
+CREATE TABLE IF NOT EXISTS proposal_revisions (
+    id SERIAL PRIMARY KEY,
+    proposal_id INTEGER REFERENCES proposals(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    content JSONB NOT NULL,
+    change_summary TEXT,
+    changed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_results_entity ON ai_results(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_proposal_revisions_proposal ON proposal_revisions(proposal_id);
+CREATE INDEX IF NOT EXISTS idx_proposal_templates_type ON proposal_templates(type);
+CREATE INDEX IF NOT EXISTS idx_proposals_public_token ON proposals(public_token);
+
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_clients_status ON clients(status);
 CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
