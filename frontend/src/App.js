@@ -22,6 +22,11 @@ import GapNoEsignatureWorkflow from './pages/GapNoEsignatureWorkflow';
 import GapNoChangeorderTracking from './pages/GapNoChangeorderTracking';
 import GapNoNotificationsAuditLogOrRbac from './pages/GapNoNotificationsAuditLogOrRbac';
 import CustomViewsPage from './pages/CustomViewsPage';
+import CodexCustomVizFeature from './pages/CodexCustomVizFeature';
+import CodexOperationsFeature from './pages/CodexOperationsFeature';
+
+import TimelineView from './pages/TimelineView';
+
 // === End Batch 07 ===
 
 import {
@@ -4571,6 +4576,10 @@ const App = () => {
         <ConfirmProvider>
           <AuthProvider>
             <Routes>
+        <Route path="/insights/timeline" element={<ProtectedRoute><TimelineView /></ProtectedRoute>} />
+        <Route path="/codex/custom-viz" element={<ProtectedRoute><CodexCustomVizFeature /></ProtectedRoute>} />
+        <Route path="/codex/operations" element={<ProtectedRoute><CodexOperationsFeature /></ProtectedRoute>} />
+
               <Route path="/login" element={<LoginPage />} />
               <Route path="/forgot-password" element={<ForgotPasswordPage />} />
               <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
