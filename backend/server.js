@@ -10,17 +10,22 @@ const PDFDocument = require('pdfkit');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
 const pool = require('./db');
+const { validateRuntime } = require('./governance/runtime');
+const { createProviderGate } = require('./governance/providerGate');
+const governanceRouter = require('./governance/router');
+const JWT_SECRET=String(process.env.JWT_SECRET||'');
+
+validateRuntime();
 
 const app = express();
 const PORT = process.env.PORT || 5001;
 
 // Security middleware
 app.use(helmet());
-app.use(cors({
-  origin: process.env.CLIENT_URL || process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true
-}));
+const allowedOrigins=String(process.env.CORS_ORIGINS||process.env.CLIENT_URL||process.env.FRONTEND_URL||'http://localhost:3000').split(',').map(v=>v.trim()).filter(Boolean);
+app.use(cors({origin:(origin,cb)=>!origin||allowedOrigins.includes(origin)?cb(null,true):cb(new Error('Origin not allowed by CORS')),credentials:true}));
 app.use(express.json());
+app.use(createProviderGate(['/api/ai','/api/gap']));
 
 // AI Rate Limiter: 20 requests per hour per user/IP
 const aiRateLimiter = rateLimit({
@@ -91,7 +96,7 @@ const authMiddleware = async (req, res, next) => {
     return res.status(401).json({ error: 'No token provided' });
   }
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+    const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded;
     next();
   } catch (err) {
@@ -131,7 +136,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET || 'secret',
+      JWT_SECRET,
       { expiresIn: '24h' }
     );
 
@@ -173,7 +178,7 @@ app.post('/api/auth/register', async (req, res) => {
     const user = result.rows[0];
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET || 'secret',
+      JWT_SECRET,
       { expiresIn: '24h' }
     );
     res.status(201).json({
@@ -209,13 +214,9 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       'UPDATE users SET reset_token = $1, reset_token_expires = $2 WHERE email = $3',
       [hashedToken, expires, email]
     );
-    // In dev, log token to console
-    console.log(`\n=== PASSWORD RESET TOKEN ===`);
-    console.log(`Email: ${email}`);
-    console.log(`Token: ${token}`);
-    console.log(`Reset URL: http://localhost:3000/reset-password/${token}`);
-    console.log(`Expires: ${expires.toISOString()}`);
-    console.log(`============================\n`);
+    if (process.env.NODE_ENV !== 'production' && process.env.ALLOW_DEMO_SEED === 'true') {
+      console.warn('A password reset token was created for explicit local demo evaluation.');
+    }
     res.json({ message: 'If that email exists, a reset link has been sent.' });
   } catch (err) {
     console.error('Forgot Password Error:', err);
@@ -1758,6 +1759,7 @@ app.get('/api/ai-results', authMiddleware, async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+app.use('/api/governed-proposal-releases', governanceRouter);
 
 // ============ CUSTOM VIEWS (mounted BEFORE 404 / app.listen) ============
 app.use('/api/custom-views', require('./routes/customViews'));

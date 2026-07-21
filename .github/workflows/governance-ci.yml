@@ -1,0 +1,16 @@
+name: governed-workflow
+on: [push, pull_request]
+permissions: { contents: read }
+jobs:
+  dependency-free-governance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: node --test backend/governance/*.test.cjs
+      - run: find backend/governance -type f \( -name '*.js' -o -name '*.cjs' \) -print0 | xargs -0 -n1 node --check
+      - run: node --check backend/server.js
+      - run: bash -n start.sh
+      - run: git diff --check
+
