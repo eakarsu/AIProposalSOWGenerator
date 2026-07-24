@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -25,13 +25,13 @@ app.use(helmet());
 const allowedOrigins=String(process.env.CORS_ORIGINS||process.env.CLIENT_URL||process.env.FRONTEND_URL||'http://localhost:3000').split(',').map(v=>v.trim()).filter(Boolean);
 app.use(cors({origin:(origin,cb)=>!origin||allowedOrigins.includes(origin)?cb(null,true):cb(new Error('Origin not allowed by CORS')),credentials:true}));
 app.use(express.json());
-app.use(createProviderGate(['/api/ai','/api/gap']));
+app.use(createProviderGate(['/api/gap']));
 
 // AI Rate Limiter: 20 requests per hour per user/IP
 const aiRateLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 20,
-  keyGenerator: (req) => req.user?.id?.toString() || req.ip,
+  keyGenerator: (req) => req.user?.id?.toString() || ipKeyGenerator(req.ip),
   message: { error: 'AI rate limit exceeded. Max 20 requests per hour.' }
 });
 
@@ -565,11 +565,11 @@ function stripMarkdownFences(text) {
  */
 async function callOpenRouter({ systemPrompt, userPrompt, maxTokens = 4096, temperature = 0.7 }) {
   const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey || apiKey === 'your-openrouter-api-key-here') {
-    throw new Error('OpenRouter API key not configured. Please add OPENROUTER_API_KEY to .env file.');
-  }
+  const model = process.env.OPENROUTER_MODEL;
+  const baseUrl = String(process.env.OPENROUTER_BASE_URL || '').replace(/\/$/, '');
+  if (!apiKey || !model || !baseUrl || apiKey === 'your-openrouter-api-key-here') throw new Error('OpenRouter runtime configuration is required');
 
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
@@ -578,7 +578,7 @@ async function callOpenRouter({ systemPrompt, userPrompt, maxTokens = 4096, temp
       'X-Title': 'AI Proposal/SOW Generator'
     },
     body: JSON.stringify({
-      model: process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022',
+      model,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
@@ -588,6 +588,7 @@ async function callOpenRouter({ systemPrompt, userPrompt, maxTokens = 4096, temp
     })
   });
 
+  if (!response.ok) throw new Error(`OpenRouter request failed with HTTP ${response.status}`);
   const data = await response.json();
 
   if (data.error) {
@@ -602,6 +603,7 @@ async function callOpenRouter({ systemPrompt, userPrompt, maxTokens = 4096, temp
   // Strip markdown fences from content
   const rawContent = data.choices?.[0]?.message?.content || '';
   const content = stripMarkdownFences(rawContent);
+  if (!content) throw new Error('OpenRouter returned empty content');
   const tokensUsed = data.usage?.total_tokens || 0;
 
   return { content, tokensUsed, raw: data };

@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -f "$PROJECT_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$PROJECT_DIR/.env"
+  set +a
+fi
 BACKEND_PORT="${BACKEND_PORT:-3001}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 CHILD_PIDS=()
@@ -12,8 +18,10 @@ trap cleanup INT TERM EXIT
 require_file "$PROJECT_DIR/.env"
 require_dir "$PROJECT_DIR/backend/node_modules"
 require_dir "$PROJECT_DIR/frontend/node_modules"
+if [[ "${ALLOW_SCHEMA_MIGRATION:-}" != "true" ]];then echo "ALLOW_SCHEMA_MIGRATION=true is required." >&2;exit 1;fi
 port_free "$BACKEND_PORT";port_free "$FRONTEND_PORT"
+(cd "$PROJECT_DIR/backend"&&node scripts/prepareRuntime.js)
 (cd "$PROJECT_DIR/backend"&&PORT="$BACKEND_PORT" node server.js)&CHILD_PIDS+=("$!")
 (cd "$PROJECT_DIR/frontend"&&PORT="$FRONTEND_PORT" BROWSER=none npm start)&CHILD_PIDS+=("$!")
-echo "Proposal services started without installing, seeding, migrating, or reclaiming ports."
+echo "Proposal services started without installing, seeding, or reclaiming ports."
 wait "${CHILD_PIDS[@]}"
