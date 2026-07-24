@@ -12,6 +12,12 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD || 'postgres',
 });
 
+function requireDemoPassword() {
+  const password = process.env.DEMO_PASSWORD || process.env.SEED_DEMO_PASSWORD || process.env.DEMO_SEED_PASSWORD || '';
+  if (password.length < 12 || password.length > 1024) throw new Error('DEMO_PASSWORD must contain 12-1024 characters');
+  return password;
+}
+
 async function seed() {
   const client = await pool.connect();
 
@@ -48,7 +54,7 @@ async function seed() {
     console.log('Empty database detected — seeding initial data...');
 
     // Seed Users (15 items)
-    const hashedPassword = await bcrypt.hash('password123', 10);
+    const hashedPassword = await bcrypt.hash(requireDemoPassword(), 10);
     const users = [
       ['admin@proposalgen.com', hashedPassword, 'Admin', 'User', 'admin'],
       ['john.smith@proposalgen.com', hashedPassword, 'John', 'Smith', 'manager'],
@@ -558,7 +564,7 @@ async function seed() {
     console.log('- Risk Sections: 15');
     console.log('\nTest Login Credentials:');
     console.log('Email: admin@proposalgen.com');
-    console.log('Password: password123');
+    console.log('Demo login users provisioned from the local environment.');
 
   } catch (err) {
     console.error('Error seeding database:', err);
