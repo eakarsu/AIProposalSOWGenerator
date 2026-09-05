@@ -1,3 +1,4 @@
+function canonical(value) { if (Array.isArray(value)) return '['+value.map(canonical).join(',')+']'; if (value && typeof value==='object') return '{'+Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+canonical(value[k])).join(',')+'}'; return JSON.stringify(value); }
 function createGovernedRouter({ express, workflow, auth, db }) {
   const crypto = require('node:crypto');
   const router = express.Router();
@@ -71,7 +72,7 @@ function createGovernedRouter({ express, workflow, auth, db }) {
         `SELECT id, subject_ref, case_type, state, policy_version, effective_at, version,
                 retention_until, created_at, updated_at
          FROM governed_cases
-         WHERE tenant_id=$1 AND ($2='*' OR subject_ref LIKE $2 || '%')
+         WHERE tenant_id=$1 AND ($2='*' OR left(subject_ref,char_length($2))=$2)
          ORDER BY created_at DESC LIMIT 200`,
         [tenant(req), req.governanceScope]
       );
@@ -100,13 +101,16 @@ function createGovernedRouter({ express, workflow, auth, db }) {
       if (inserted[0]) return res.status(201).json(inserted[0]);
       const existing = await db.query(
         `SELECT * FROM governed_cases
-         WHERE tenant_id=$1 AND idempotency_key=$2 AND ($3='*' OR subject_ref LIKE $3 || '%')`,
+         WHERE tenant_id=$1 AND idempotency_key=$2 AND ($3='*' OR left(subject_ref,char_length($3))=$3)`,
         [ctx.tenantId, ctx.idempotencyKey, req.governanceScope]
       );
       if (!existing[0]) return res.status(409).json({ error: 'IDEMPOTENCY_CONFLICT' });
       if (existing[0].subject_ref !== item.subjectRef ||
           existing[0].policy_version !== item.policyVersion ||
-          new Date(existing[0].effective_at).toISOString() !== item.effectiveAt) {
+          new Date(existing[0].effective_at).toISOString() !== item.effectiveAt ||
+          String(existing[0].created_by) !== ctx.actorId ||
+          canonical(existing[0].source_snapshot) !== canonical(item.sourceSnapshot) ||
+          (existing[0].retention_until ? new Date(existing[0].retention_until).toISOString() : null) !== item.retentionUntil) {
         return res.status(409).json({ error: 'IDEMPOTENCY_PAYLOAD_CONFLICT' });
       }
       return res.status(200).json({ ...existing[0], idempotentReplay: true });
@@ -122,7 +126,7 @@ function createGovernedRouter({ express, workflow, auth, db }) {
           FILTER (WHERE e.id IS NOT NULL), '[]') AS evidence
          FROM governed_cases c
          LEFT JOIN governed_evidence e ON e.case_id=c.id AND e.tenant_id=c.tenant_id
-         WHERE c.id=$1 AND c.tenant_id=$2 AND ($3='*' OR c.subject_ref LIKE $3 || '%')
+         WHERE c.id=$1 AND c.tenant_id=$2 AND ($3='*' OR left(c.subject_ref,char_length($3))=$3)
          GROUP BY c.id`,
         [req.params.id, tenant(req), req.governanceScope]
       );
@@ -140,7 +144,7 @@ function createGovernedRouter({ express, workflow, auth, db }) {
                 e.actor_id, e.actor_role, e.details, e.created_at
          FROM governed_events e
          JOIN governed_cases c ON c.id=e.case_id AND c.tenant_id=e.tenant_id
-         WHERE e.case_id=$1 AND e.tenant_id=$2 AND ($3='*' OR c.subject_ref LIKE $3 || '%')
+         WHERE e.case_id=$1 AND e.tenant_id=$2 AND ($3='*' OR left(c.subject_ref,char_length($3))=$3)
          ORDER BY e.created_at, e.id`,
         [req.params.id, tenant(req), req.governanceScope]
       );
@@ -158,9 +162,9 @@ function createGovernedRouter({ express, workflow, auth, db }) {
         `INSERT INTO governed_evidence
           (id, tenant_id, case_id, idempotency_key, kind, source_ref, source_version,
            sha256, captured_at, consent_basis, metadata, created_by)
-         SELECT $1,$2,c.id,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12
+         SELECT $1::uuid,$2::varchar,c.id,$4::varchar,$5,$6,$7,$8,$9,$10,$11::jsonb,$12
          FROM governed_cases c
-         WHERE c.id=$3 AND c.tenant_id=$2 AND ($13='*' OR c.subject_ref LIKE $13 || '%')
+         WHERE c.id=$3 AND c.tenant_id=$2 AND ($13='*' OR left(c.subject_ref,char_length($13))=$13)
          ON CONFLICT DO NOTHING RETURNING *`,
         [item.id, ctx.tenantId, req.params.id, ctx.idempotencyKey, item.kind, item.sourceRef,
           item.sourceVersion, item.sha256, item.capturedAt, item.consentBasis,
@@ -172,13 +176,16 @@ function createGovernedRouter({ express, workflow, auth, db }) {
          JOIN governed_cases c ON c.id=e.case_id AND c.tenant_id=e.tenant_id
          WHERE e.tenant_id=$1
            AND (e.idempotency_key=$2 OR (e.case_id=$3 AND e.sha256=$4))
-           AND ($5='*' OR c.subject_ref LIKE $5 || '%')`,
+           AND ($5='*' OR left(c.subject_ref,char_length($5))=$5)`,
         [ctx.tenantId, ctx.idempotencyKey, req.params.id, item.sha256, req.governanceScope]
       );
       if (!existing[0]) return res.status(404).json({ error: 'CASE_NOT_FOUND' });
       if (String(existing[0].case_id) !== String(req.params.id) ||
           existing[0].sha256 !== item.sha256 ||
-          existing[0].kind !== item.kind) {
+          existing[0].kind !== item.kind || existing[0].source_ref !== item.sourceRef ||
+          existing[0].source_version !== item.sourceVersion || String(existing[0].created_by) !== ctx.actorId ||
+          new Date(existing[0].captured_at).toISOString() !== item.capturedAt ||
+          existing[0].consent_basis !== item.consentBasis || canonical(existing[0].metadata) !== canonical(item.metadata)) {
         return res.status(409).json({ error: 'IDEMPOTENCY_PAYLOAD_CONFLICT' });
       }
       res.status(200).json({ ...existing[0], idempotentReplay: true });
@@ -190,13 +197,14 @@ function createGovernedRouter({ express, workflow, auth, db }) {
   router.post('/cases/:id/assess', async (req, res) => {
     try {
       const ctx = workflow.context(req.headers, req.user);
+      const requestHash = crypto.createHash('sha256').update(canonical({ operation: 'assess', body: req.body || {}, actor: ctx.actorId, role: ctx.role })).digest('hex');
       const prior = await db.query(
-        `SELECT id, case_id, action, details FROM governed_events
-         WHERE tenant_id=$1 AND idempotency_key=$2`,
-        [ctx.tenantId, ctx.idempotencyKey]
+        `SELECT e.id, e.case_id, e.action, e.details FROM governed_events e JOIN governed_cases c ON c.id=e.case_id AND c.tenant_id=e.tenant_id
+         WHERE e.tenant_id=$1 AND e.idempotency_key=$2 AND ($3='*' OR left(c.subject_ref,char_length($3))=$3)`,
+        [ctx.tenantId, ctx.idempotencyKey, req.governanceScope]
       );
       if (prior[0]) {
-        if (String(prior[0].case_id) !== String(req.params.id) || prior[0].action !== 'assess') {
+        if (String(prior[0].case_id) !== String(req.params.id) || prior[0].action !== 'assess' || prior[0].details.requestHash !== requestHash) {
           return res.status(409).json({ error: 'IDEMPOTENCY_PAYLOAD_CONFLICT' });
         }
         return res.json({ ...prior[0].details, eventId: prior[0].id, idempotentReplay: true });
@@ -206,14 +214,14 @@ function createGovernedRouter({ express, workflow, auth, db }) {
         `INSERT INTO governed_events
           (id, tenant_id, case_id, idempotency_key, event_type, action, from_state,
            to_state, reason, actor_id, actor_role, details)
-         SELECT $1,$2,c.id,$4,'assessment','assess',c.state,c.state,
+         SELECT $1::uuid,$2::varchar,c.id,$4::varchar,'assessment','assess',c.state,c.state,
                 'Deterministic triage; no final decision',$5,$6,$7::jsonb
          FROM governed_cases c
-         WHERE c.id=$3 AND c.tenant_id=$2 AND ($8='*' OR c.subject_ref LIKE $8 || '%')
+         WHERE c.id=$3 AND c.tenant_id=$2 AND ($8='*' OR left(c.subject_ref,char_length($8))=$8)
          ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
          RETURNING id`,
         [crypto.randomUUID(), ctx.tenantId, req.params.id, ctx.idempotencyKey,
-          ctx.actorId, ctx.role, JSON.stringify(assessment), req.governanceScope]
+          ctx.actorId, ctx.role, JSON.stringify({ ...assessment, requestHash }), req.governanceScope]
       );
       if (!events[0]) return res.status(409).json({ error: 'CASE_NOT_FOUND_OR_REPLAY_CONFLICT' });
       res.json({ ...assessment, eventId: events[0].id });
@@ -225,15 +233,16 @@ function createGovernedRouter({ express, workflow, auth, db }) {
   router.post('/cases/:id/transitions', async (req, res) => {
     try {
       const ctx = workflow.context(req.headers, req.user);
+      const requestHash = crypto.createHash('sha256').update(canonical({ operation: 'transitions', body: req.body || {}, actor: ctx.actorId, role: ctx.role })).digest('hex');
       const result = await db.transaction(async (query) => {
         const prior = await query(
-          `SELECT id, case_id, action, to_state, details FROM governed_events
-           WHERE tenant_id=$1 AND idempotency_key=$2`,
-          [ctx.tenantId, ctx.idempotencyKey]
+          `SELECT e.id, e.case_id, e.action, e.to_state, e.details FROM governed_events e JOIN governed_cases c ON c.id=e.case_id AND c.tenant_id=e.tenant_id
+           WHERE e.tenant_id=$1 AND e.idempotency_key=$2 AND ($3='*' OR left(c.subject_ref,char_length($3))=$3)`,
+          [ctx.tenantId, ctx.idempotencyKey, req.governanceScope]
         );
         if (prior[0]) {
           if (String(prior[0].case_id) !== String(req.params.id) ||
-              prior[0].action !== String(req.body && req.body.action || '')) {
+              prior[0].action !== String(req.body && req.body.action || '') || prior[0].details.requestHash !== requestHash) {
             const error = new Error('Idempotency key was used for another operation.');
             error.code = 'IDEMPOTENCY_PAYLOAD_CONFLICT';
             error.status = 409;
@@ -255,7 +264,7 @@ function createGovernedRouter({ express, workflow, auth, db }) {
               WHERE e.case_id=c.id AND e.tenant_id=c.tenant_id AND e.event_type='transition'
               ORDER BY e.created_at DESC, e.id DESC LIMIT 1) AS last_actor_id
            FROM governed_cases c
-           WHERE c.id=$1 AND c.tenant_id=$2 AND ($3='*' OR c.subject_ref LIKE $3 || '%')
+           WHERE c.id=$1 AND c.tenant_id=$2 AND ($3='*' OR left(c.subject_ref,char_length($3))=$3)
            FOR UPDATE`,
           [req.params.id, ctx.tenantId, req.governanceScope]
         );
@@ -291,7 +300,7 @@ function createGovernedRouter({ express, workflow, auth, db }) {
            VALUES ($1,$2,$3,$4,'transition',$5,$6,$7,$8,$9,$10,$11::jsonb)`,
           [decision.eventId, ctx.tenantId, current.id, ctx.idempotencyKey, decision.action,
             current.state, decision.to, decision.reason, ctx.actorId, ctx.role,
-            JSON.stringify({ fromVersion: current.version, toVersion: updated[0].version })]
+            JSON.stringify({ requestHash, fromVersion: current.version, toVersion: updated[0].version })]
         );
         return { ...updated[0], eventId: decision.eventId };
       });

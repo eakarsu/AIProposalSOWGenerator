@@ -413,7 +413,7 @@ const LoginPage = () => {
           </button>
           {!isRegister && (
             <button type="button" className="btn demo-btn btn-block" onClick={fillDemo}>
-              <UserCircle size={18} /> Fill Demo Credentials
+              <UserCircle size={18} /> Auto Fill Demo Credentials
             </button>
           )}
         </form>

@@ -1,0 +1,7 @@
+const test=require('node:test'),assert=require('node:assert/strict');
+const {createWorkflow}=require('./workflowCore'),config=require('./config'),w=createWorkflow(config);
+test('malformed evidence counts cannot authorize a transition',()=>{const rule=config.transitions.find(x=>x.requiresEvidence);for(const count of ['bad',Infinity,-1,0])assert.throws(()=>w.transition({state:rule.from,version:1,evidenceCount:count,createdBy:'someone',lastActorId:'other'},{action:rule.action,expectedVersion:1,reason:'Verified evidence review'},{role:rule.roles[0],actorId:'reviewer'}),/evidence/);});
+test('whitespace signals cannot become a supported assessment',()=>{const result=w.deterministicAssessment({...config.acceptedFixture,[config.requiredSignals[0]]:'  '},{role:config.assessmentRoles[0]});assert.equal(result.disposition,'insufficient_evidence');});
+test('out of range scores cannot pass publication review',()=>{for(const key of ['responseCoverage','qualityScore','timingFidelity','layoutFidelity'].filter(k=>k in config.acceptedFixture)){const result=w.deterministicAssessment({...config.acceptedFixture,[key]:2},{role:config.assessmentRoles[0]});assert.notEqual(result.disposition,config.readyDisposition);}});
+
+test('boolean quality signals are not measured numeric evidence',()=>{for(const key of config.requiredSignals.filter(k=>typeof config.acceptedFixture[k]==='number'))assert.equal(w.deterministicAssessment({...config.acceptedFixture,[key]:true},{role:config.assessmentRoles[0]}).disposition,'insufficient_evidence');});

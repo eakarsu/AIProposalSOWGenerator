@@ -128,7 +128,7 @@ function createWorkflow(config) {
     const rule = transitionMap.get(`${record.state}:${input.action}`);
     if (!rule) throw problem('TRANSITION_INVALID', `Action ${input.action} is not allowed from ${record.state}.`, 409);
     if (!rule.roles.includes(ctx.role)) throw problem('FORBIDDEN', 'Role cannot perform this transition.', 403);
-    if (rule.requiresEvidence && Number(record.evidenceCount || 0) < 1) {
+    if (rule.requiresEvidence && (!Number.isSafeInteger(Number(record.evidenceCount)) || Number(record.evidenceCount) < 1)) {
       throw problem('EVIDENCE_REQUIRED', 'At least one evidence record is required.', 409);
     }
     if (rule.dualControl && [record.createdBy, record.lastActorId].map(String).includes(ctx.actorId)) {
@@ -143,7 +143,7 @@ function createWorkflow(config) {
 
   function deterministicAssessment(input, ctx) {
     if (!assessmentRoles.has(ctx.role)) throw problem('FORBIDDEN', 'Role cannot assess this case.', 403);
-    const missing = config.requiredSignals.filter((key) => input[key] === undefined || input[key] === null || input[key] === '');
+    const missing = config.requiredSignals.filter((key) => input[key] === undefined || input[key] === null || (typeof input[key] === 'string' && !input[key].trim()) || (typeof config.acceptedFixture?.[key] === 'number' && !['number','string'].includes(typeof input[key])));
     if (missing.length) {
       return { disposition: 'insufficient_evidence', missing, automatedDecision: false, requiresHumanReview: true };
     }
