@@ -1774,16 +1774,8 @@ app.listen(PORT, () => {
 // AI feature mount: sow-generate
 app.use('/api/ai/sow-generate', require('./routes/ai-sow-generate'));
 // === Batch 07 Gaps & Frontend Mounts ===
-app.use('/api/gap-no-ai-sow-generation-endpoint', require('./routes/gap-no-ai-sow-generation-endpoint'));
-app.use('/api/gap-no-ai-proposalfrombrief-generation', require('./routes/gap-no-ai-proposalfrombrief-generation'));
-app.use('/api/gap-no-ai-clauseterm-recommendation', require('./routes/gap-no-ai-clauseterm-recommendation'));
-app.use('/api/gap-no-ai-pricing-intelligence', require('./routes/gap-no-ai-pricing-intelligence'));
-app.use('/api/gap-no-ai-risk-allocation-generation', require('./routes/gap-no-ai-risk-allocation-generation'));
-app.use('/api/gap-no-client-project-or-proposal-crud', require('./routes/gap-no-client-project-or-proposal-crud'));
-app.use('/api/gap-no-template-library-or-section-snippets', require('./routes/gap-no-template-library-or-section-snippets'));
-app.use('/api/gap-no-pricingratecard-management', require('./routes/gap-no-pricingratecard-management'));
-app.use('/api/gap-no-pdf-export-route-codebase-imports-pdf-lib', require('./routes/gap-no-pdf-export-route-codebase-imports-pdf-lib'));
-app.use('/api/gap-no-esignature-workflow', require('./routes/gap-no-esignature-workflow'));
-app.use('/api/gap-no-changeorder-tracking', require('./routes/gap-no-changeorder-tracking'));
-app.use('/api/gap-no-notifications-audit-log-or-rbac', require('./routes/gap-no-notifications-audit-log-or-rbac'));
+app.use('/api/clause-terms', require('./routes/clauseTerms')({ pool, authMiddleware, checkRole, callOpenRouter, aiRateLimiter }));
+app.use('/api/e-signatures', require('./routes/eSignature')({ pool, authMiddleware, checkRole }));
+app.use('/api/change-orders', require('./routes/changeOrders')({ pool, authMiddleware, checkRole }));
+app.use('/api/audit', require('./routes/auditLog')({ pool, authMiddleware, checkRole }));
 // === End Batch 07 ===
