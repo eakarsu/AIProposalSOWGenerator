@@ -1,31 +1,28 @@
 // Custom Views router: 4 endpoints (2 VIZ + 2 NON-VIZ)
-// 1. /win-rate (VIZ) - Proposal win rate chart
-// 2. /service-revenue-heatmap (VIZ) - Service line revenue heatmap
-// 3. /sow-pdf/:id (NON-VIZ) - SOW document PDF export
-// 4. /template-rules (NON-VIZ CRUD) - Proposal template rules (pricing tiers, T&Cs)
+// 1. /win-rate (VIZ) - Proposal win rate chart, computed from the proposals table
+// 2. /service-revenue-heatmap (VIZ) - Service line revenue heatmap, computed from
+//    proposal_items joined to services; empty state when no line items exist
+// 3. /sow-pdf/:id (NON-VIZ) - SOW document PDF export; 404 for missing/unauthorized
+//    SOWs (never fabricates a document)
+// 4. /template-rules (NON-VIZ CRUD) - Proposal template rules (pricing tiers, T&Cs);
+//    reads for any authenticated user, writes restricted to admin/manager
+//
+// All endpoints require the same JWT auth middleware used by the rest of the API.
 
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const PDFDocument = require('pdfkit');
-const pool = require('../db');
 
-const router = express.Router();
-
-// Soft auth middleware - if token present, verify it; allow through regardless so endpoints stay 200
-function softAuth(req, res, next) {
-  const auth = req.headers.authorization;
-  if (auth && auth.startsWith('Bearer ')) {
-    try {
-      req.user = jwt.verify(auth.slice(7), process.env.JWT_SECRET);
-    } catch (_) { /* ignore */ }
+function createCustomViewsRouter({ pool, authMiddleware, checkRole }) {
+  if (!pool || !authMiddleware || !checkRole) {
+    throw new Error('customViews router requires { pool, authMiddleware, checkRole }');
   }
-  next();
-}
 
-router.use(softAuth);
+  const router = express.Router();
+  router.use(authMiddleware);
 
-async function ensureRulesTable() {
-  try {
+  const isPrivileged = (user) => !!user && (user.role === 'admin' || user.role === 'manager');
+
+  async function ensureRulesTable() {
     await pool.query(`CREATE TABLE IF NOT EXISTS proposal_template_rules (
       id SERIAL PRIMARY KEY,
       tier_name VARCHAR(120) NOT NULL,
@@ -47,19 +44,18 @@ async function ensureRulesTable() {
         ('Enterprise', 100000, 1000000, 10, 'Net 45', 'Milestone billing. Dedicated CSM. SLA 99.9%. Annual review.'),
         ('Strategic', 1000000, 99999999, 15, 'Net 60', 'Custom MSA. Executive sponsor. Mutual NDA. Liability cap 2x fees.')`);
     }
-  } catch (e) { console.error('ensureRulesTable error:', e.message); }
-}
+  }
 
-// =================== VIZ 1: Proposal Win Rate Chart ===================
-router.get('/win-rate', async (req, res) => {
-  try {
-    let monthly = [];
-    let totals = { won: 0, lost: 0, pending: 0, total: 0, winRate: 0 };
+  // =================== VIZ 1: Proposal Win Rate Chart ===================
+  router.get('/win-rate', async (req, res) => {
     try {
+      const emptyTotals = { won: 0, lost: 0, pending: 0, total: 0, winRate: 0 };
+
       const r = await pool.query(`
         SELECT status, COUNT(*)::int AS c, COALESCE(SUM(total_amount),0)::float AS amt
         FROM proposals GROUP BY status
       `);
+      const totals = { ...emptyTotals };
       r.rows.forEach(row => {
         const s = (row.status || '').toLowerCase();
         if (s.includes('accept') || s === 'won' || s === 'approved') totals.won += row.c;
@@ -67,7 +63,9 @@ router.get('/win-rate', async (req, res) => {
         else totals.pending += row.c;
         totals.total += row.c;
       });
-      totals.winRate = totals.total > 0 ? +(totals.won / Math.max(1, totals.won + totals.lost) * 100).toFixed(1) : 0;
+      totals.winRate = (totals.won + totals.lost) > 0
+        ? +(totals.won / (totals.won + totals.lost) * 100).toFixed(1)
+        : 0;
 
       const m = await pool.query(`
         SELECT TO_CHAR(created_at, 'YYYY-MM') AS month,
@@ -78,219 +76,231 @@ router.get('/win-rate', async (req, res) => {
         WHERE created_at IS NOT NULL
         GROUP BY 1 ORDER BY 1 DESC LIMIT 12
       `);
-      monthly = m.rows.reverse().map(r => ({
-        month: r.month,
-        total: r.total,
-        won: r.won,
-        lost: r.lost,
-        winRate: (r.won + r.lost) > 0 ? +(r.won / (r.won + r.lost) * 100).toFixed(1) : 0,
+      const monthly = m.rows.reverse().map(row => ({
+        month: row.month,
+        total: row.total,
+        won: row.won,
+        lost: row.lost,
+        winRate: (row.won + row.lost) > 0 ? +(row.won / (row.won + row.lost) * 100).toFixed(1) : 0,
       }));
-    } catch (_) { /* table may be empty */ }
 
-    // Seed fallback if no data
-    if (monthly.length === 0) {
+      res.json({
+        ok: true,
+        hasData: monthly.length > 0,
+        totals,
+        monthly,
+        message: monthly.length > 0 ? null : 'No proposals recorded yet.',
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error('win-rate error:', err.message);
+      res.status(500).json({
+        ok: false,
+        error: err.message,
+        totals: { won: 0, lost: 0, pending: 0, total: 0, winRate: 0 },
+        monthly: [],
+      });
+    }
+  });
+
+  // =================== VIZ 2: Service Line Revenue Heatmap ===================
+  router.get('/service-revenue-heatmap', async (req, res) => {
+    try {
       const now = new Date();
-      monthly = Array.from({ length: 6 }).map((_, i) => {
+      const months = Array.from({ length: 6 }).map((_, i) => {
         const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
-        const won = 3 + Math.floor(Math.random() * 7);
-        const lost = 1 + Math.floor(Math.random() * 5);
+        return d.toISOString().slice(0, 7);
+      });
+
+      // Real revenue per service line per month, from proposal line items.
+      const r = await pool.query(`
+        SELECT TO_CHAR(p.created_at, 'YYYY-MM') AS month,
+               s.id AS service_id,
+               s.name AS service_name,
+               s.category AS category,
+               COALESCE(SUM(pi.total_price), 0)::float AS revenue,
+               COUNT(DISTINCT p.id)::int AS deals
+          FROM proposal_items pi
+          JOIN proposals p ON p.id = pi.proposal_id
+          JOIN services s ON s.id = pi.service_id
+         WHERE p.created_at >= date_trunc('month', NOW()) - interval '5 months'
+         GROUP BY 1, 2, 3, 4
+         ORDER BY 1
+      `);
+
+      const byService = new Map();
+      for (const row of r.rows) {
+        if (!byService.has(row.service_id)) {
+          byService.set(row.service_id, {
+            serviceId: row.service_id,
+            serviceName: row.service_name,
+            category: row.category || 'General',
+            cells: new Map(),
+          });
+        }
+        byService.get(row.service_id).cells.set(row.month, {
+          revenue: Number(row.revenue) || 0,
+          deals: row.deals || 0,
+        });
+      }
+
+      const services = [...byService.values()].map(svc => {
+        const cells = months.map(m => svc.cells.get(m) || { month: m, revenue: 0, deals: 0 });
         return {
-          month: d.toISOString().slice(0, 7),
-          total: won + lost + Math.floor(Math.random() * 3),
-          won, lost,
-          winRate: +(won / (won + lost) * 100).toFixed(1),
+          serviceId: svc.serviceId,
+          serviceName: svc.serviceName,
+          category: svc.category,
+          cells,
+          total: cells.reduce((s, c) => s + c.revenue, 0),
         };
       });
-      totals = {
-        won: monthly.reduce((s, m) => s + m.won, 0),
-        lost: monthly.reduce((s, m) => s + m.lost, 0),
-        pending: 4,
-        total: monthly.reduce((s, m) => s + m.total, 0),
-        winRate: 0,
-      };
-      totals.winRate = +(totals.won / Math.max(1, totals.won + totals.lost) * 100).toFixed(1);
-    }
 
-    res.json({ ok: true, totals, monthly, generatedAt: new Date().toISOString() });
-  } catch (err) {
-    res.status(200).json({ ok: false, error: err.message, totals: { won: 0, lost: 0, pending: 0, total: 0, winRate: 0 }, monthly: [] });
-  }
-});
+      const revenues = services.flatMap(s => s.cells.map(c => c.revenue));
+      const max = revenues.length ? Math.max(...revenues) : 0;
+      const min = revenues.length ? Math.min(...revenues) : 0;
 
-// =================== VIZ 2: Service Line Revenue Heatmap ===================
-router.get('/service-revenue-heatmap', async (req, res) => {
-  try {
-    let services = [];
-    try {
-      const s = await pool.query('SELECT id, name, category FROM services ORDER BY name LIMIT 8');
-      services = s.rows;
-    } catch (_) {}
-    if (services.length === 0) {
-      services = [
-        { id: 1, name: 'Strategy Consulting', category: 'Advisory' },
-        { id: 2, name: 'Custom Software Dev', category: 'Engineering' },
-        { id: 3, name: 'Data & Analytics', category: 'Data' },
-        { id: 4, name: 'Cloud Migration', category: 'Infrastructure' },
-        { id: 5, name: 'AI/ML Solutions', category: 'AI' },
-        { id: 6, name: 'Security Audit', category: 'Security' },
-      ];
-    }
-    const now = new Date();
-    const months = Array.from({ length: 6 }).map((_, i) => {
-      const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
-      return d.toISOString().slice(0, 7);
-    });
-
-    // Build matrix [service][month] => revenue
-    const matrix = services.map((svc, sIdx) => {
-      const cells = months.map((m, mIdx) => {
-        const seed = (svc.id || sIdx + 1) * 31 + mIdx * 17;
-        const base = 8000 + ((seed * 137) % 95000);
-        return { month: m, revenue: base, deals: 1 + ((seed * 7) % 9) };
+      res.json({
+        ok: true,
+        hasData: services.length > 0,
+        months,
+        services,
+        bounds: { min, max },
+        grandTotal: services.reduce((s, row) => s + row.total, 0),
+        message: services.length > 0
+          ? null
+          : 'No proposal line items referencing services in the last 6 months.',
+        generatedAt: new Date().toISOString(),
       });
-      return {
-        serviceId: svc.id,
-        serviceName: svc.name,
-        category: svc.category || 'General',
-        cells,
-        total: cells.reduce((s, c) => s + c.revenue, 0),
-      };
-    });
-
-    const max = Math.max(...matrix.flatMap(r => r.cells.map(c => c.revenue)));
-    const min = Math.min(...matrix.flatMap(r => r.cells.map(c => c.revenue)));
-
-    res.json({
-      ok: true,
-      months,
-      services: matrix,
-      bounds: { min, max },
-      grandTotal: matrix.reduce((s, r) => s + r.total, 0),
-      generatedAt: new Date().toISOString(),
-    });
-  } catch (err) {
-    res.status(200).json({ ok: false, error: err.message, months: [], services: [] });
-  }
-});
-
-// =================== NON-VIZ 1: SOW Document PDF Export ===================
-router.get('/sow-pdf/:id?', async (req, res) => {
-  try {
-    const id = req.params.id;
-    let sow = null;
-    if (id) {
-      try {
-        const r = await pool.query('SELECT * FROM sows WHERE id = $1', [id]);
-        if (r.rows.length) sow = r.rows[0];
-      } catch (_) {}
+    } catch (err) {
+      console.error('service-revenue-heatmap error:', err.message);
+      res.status(500).json({ ok: false, error: err.message, months: [], services: [] });
     }
-    if (!sow) {
-      sow = {
-        id: id || 'DEMO-001',
-        title: 'Sample Statement of Work',
-        scope: 'Provide professional services per the attached engagement summary, including discovery, design, implementation, testing, and knowledge transfer.',
-        deliverables: 'Discovery report; Architecture document; Implemented solution; Test reports; Training session.',
-        timeline: '12 weeks from kickoff (Phases: Discovery 2w, Design 3w, Build 5w, QA 1w, Transition 1w).',
-        total_amount: 87500,
-        status: 'draft',
+  });
+
+  // =================== NON-VIZ 1: SOW Document PDF Export ===================
+  router.get('/sow-pdf/:id?', async (req, res) => {
+    try {
+      const id = req.params.id;
+      if (!id || !/^\d+$/.test(String(id))) {
+        return res.status(400).json({ ok: false, error: 'A numeric SOW id is required' });
+      }
+
+      const r = await pool.query('SELECT * FROM sows WHERE id = $1', [id]);
+      if (r.rows.length === 0) {
+        return res.status(404).json({ ok: false, error: `SOW ${id} not found` });
+      }
+      const sow = r.rows[0];
+
+      // Scope non-privileged users to SOWs they created (legacy rows without a
+      // creator remain readable, matching the generic CRUD list behavior).
+      if (!isPrivileged(req.user) && sow.created_by != null && Number(sow.created_by) !== Number(req.user.id)) {
+        return res.status(404).json({ ok: false, error: `SOW ${id} not found` });
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="SOW-${sow.id}.pdf"`);
+
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      doc.pipe(res);
+
+      doc.fontSize(20).font('Helvetica-Bold').fillColor('#1a73e8').text('Statement of Work', { align: 'center' });
+      doc.moveDown(0.5);
+      doc.fontSize(12).font('Helvetica').fillColor('#666').text(`SOW #${sow.id} - ${new Date().toLocaleDateString()}`, { align: 'center' });
+      doc.moveDown(1.5);
+
+      const section = (title, body) => {
+        doc.fontSize(14).font('Helvetica-Bold').fillColor('#1a73e8').text(title);
+        doc.moveDown(0.3);
+        doc.fontSize(10).font('Helvetica').fillColor('#3c4043').text(body || 'N/A', { width: 495, align: 'justify' });
+        doc.moveDown(1);
       };
-    }
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="SOW-${sow.id}.pdf"`);
+      section('Title', sow.title || 'Untitled SOW');
+      section('Scope of Work', sow.scope || '');
+      section('Deliverables', sow.deliverables || '');
+      section('Timeline', sow.timeline || '');
+      section('Total Contract Value', `$${Number(sow.total_amount || 0).toLocaleString()}`);
+      section('Status', String(sow.status || 'draft').toUpperCase());
 
-    const doc = new PDFDocument({ size: 'A4', margin: 50 });
-    doc.pipe(res);
-
-    doc.fontSize(20).font('Helvetica-Bold').fillColor('#1a73e8').text('Statement of Work', { align: 'center' });
-    doc.moveDown(0.5);
-    doc.fontSize(12).font('Helvetica').fillColor('#666').text(`SOW #${sow.id} - ${new Date().toLocaleDateString()}`, { align: 'center' });
-    doc.moveDown(1.5);
-
-    const section = (title, body) => {
-      doc.fontSize(14).font('Helvetica-Bold').fillColor('#1a73e8').text(title);
-      doc.moveDown(0.3);
-      doc.fontSize(10).font('Helvetica').fillColor('#3c4043').text(body || 'N/A', { width: 495, align: 'justify' });
       doc.moveDown(1);
-    };
+      doc.fontSize(9).fillColor('#888').text('Generated by ProposalGen Custom Views', { align: 'center' });
 
-    section('Title', sow.title || 'Untitled SOW');
-    section('Scope of Work', sow.scope || '');
-    section('Deliverables', sow.deliverables || '');
-    section('Timeline', sow.timeline || '');
-    section('Total Contract Value', `$${Number(sow.total_amount || 0).toLocaleString()}`);
-    section('Status', String(sow.status || 'draft').toUpperCase());
-
-    doc.moveDown(1);
-    doc.fontSize(9).fillColor('#888').text('Generated by ProposalGen Custom Views', { align: 'center' });
-
-    doc.end();
-  } catch (err) {
-    if (!res.headersSent) {
-      res.status(200).json({ ok: false, error: err.message });
+      doc.end();
+    } catch (err) {
+      console.error('sow-pdf error:', err.message);
+      if (!res.headersSent) {
+        res.status(500).json({ ok: false, error: err.message });
+      }
     }
-  }
-});
+  });
 
-// =================== NON-VIZ 2: Proposal Template Rules Editor (CRUD) ===================
-router.get('/template-rules', async (req, res) => {
-  try {
-    await ensureRulesTable();
-    const r = await pool.query('SELECT * FROM proposal_template_rules ORDER BY min_amount ASC');
-    res.json({ ok: true, rules: r.rows, count: r.rows.length });
-  } catch (err) {
-    res.status(200).json({ ok: false, error: err.message, rules: [] });
-  }
-});
+  // =================== NON-VIZ 2: Proposal Template Rules Editor (CRUD) ===================
+  router.get('/template-rules', async (req, res) => {
+    try {
+      await ensureRulesTable();
+      const r = await pool.query('SELECT * FROM proposal_template_rules ORDER BY min_amount ASC');
+      res.json({ ok: true, rules: r.rows, count: r.rows.length });
+    } catch (err) {
+      console.error('template-rules list error:', err.message);
+      res.status(500).json({ ok: false, error: err.message, rules: [] });
+    }
+  });
 
-router.post('/template-rules', async (req, res) => {
-  try {
-    await ensureRulesTable();
-    const { tier_name, min_amount, max_amount, discount_pct, payment_terms, terms_conditions } = req.body || {};
-    if (!tier_name) return res.status(400).json({ ok: false, error: 'tier_name is required' });
-    const r = await pool.query(
-      `INSERT INTO proposal_template_rules (tier_name, min_amount, max_amount, discount_pct, payment_terms, terms_conditions)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [tier_name, min_amount || 0, max_amount || 0, discount_pct || 0, payment_terms || '', terms_conditions || '']
-    );
-    res.json({ ok: true, rule: r.rows[0] });
-  } catch (err) {
-    res.status(200).json({ ok: false, error: err.message });
-  }
-});
+  router.post('/template-rules', checkRole('admin', 'manager'), async (req, res) => {
+    try {
+      await ensureRulesTable();
+      const { tier_name, min_amount, max_amount, discount_pct, payment_terms, terms_conditions } = req.body || {};
+      if (!tier_name) return res.status(400).json({ ok: false, error: 'tier_name is required' });
+      const r = await pool.query(
+        `INSERT INTO proposal_template_rules (tier_name, min_amount, max_amount, discount_pct, payment_terms, terms_conditions)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [tier_name, min_amount || 0, max_amount || 0, discount_pct || 0, payment_terms || '', terms_conditions || '']
+      );
+      res.json({ ok: true, rule: r.rows[0] });
+    } catch (err) {
+      console.error('template-rules create error:', err.message);
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
 
-router.put('/template-rules/:id', async (req, res) => {
-  try {
-    await ensureRulesTable();
-    const { tier_name, min_amount, max_amount, discount_pct, payment_terms, terms_conditions, active } = req.body || {};
-    const r = await pool.query(
-      `UPDATE proposal_template_rules SET
-         tier_name = COALESCE($1, tier_name),
-         min_amount = COALESCE($2, min_amount),
-         max_amount = COALESCE($3, max_amount),
-         discount_pct = COALESCE($4, discount_pct),
-         payment_terms = COALESCE($5, payment_terms),
-         terms_conditions = COALESCE($6, terms_conditions),
-         active = COALESCE($7, active),
-         updated_at = CURRENT_TIMESTAMP
-       WHERE id = $8 RETURNING *`,
-      [tier_name, min_amount, max_amount, discount_pct, payment_terms, terms_conditions, active, req.params.id]
-    );
-    if (r.rows.length === 0) return res.status(404).json({ ok: false, error: 'Not found' });
-    res.json({ ok: true, rule: r.rows[0] });
-  } catch (err) {
-    res.status(200).json({ ok: false, error: err.message });
-  }
-});
+  router.put('/template-rules/:id', checkRole('admin', 'manager'), async (req, res) => {
+    try {
+      await ensureRulesTable();
+      const { tier_name, min_amount, max_amount, discount_pct, payment_terms, terms_conditions, active } = req.body || {};
+      const r = await pool.query(
+        `UPDATE proposal_template_rules SET
+           tier_name = COALESCE($1, tier_name),
+           min_amount = COALESCE($2, min_amount),
+           max_amount = COALESCE($3, max_amount),
+           discount_pct = COALESCE($4, discount_pct),
+           payment_terms = COALESCE($5, payment_terms),
+           terms_conditions = COALESCE($6, terms_conditions),
+           active = COALESCE($7, active),
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = $8 RETURNING *`,
+        [tier_name, min_amount, max_amount, discount_pct, payment_terms, terms_conditions, active, req.params.id]
+      );
+      if (r.rows.length === 0) return res.status(404).json({ ok: false, error: 'Not found' });
+      res.json({ ok: true, rule: r.rows[0] });
+    } catch (err) {
+      console.error('template-rules update error:', err.message);
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
 
-router.delete('/template-rules/:id', async (req, res) => {
-  try {
-    await ensureRulesTable();
-    await pool.query('DELETE FROM proposal_template_rules WHERE id = $1', [req.params.id]);
-    res.json({ ok: true, deleted: req.params.id });
-  } catch (err) {
-    res.status(200).json({ ok: false, error: err.message });
-  }
-});
+  router.delete('/template-rules/:id', checkRole('admin', 'manager'), async (req, res) => {
+    try {
+      await ensureRulesTable();
+      const r = await pool.query('DELETE FROM proposal_template_rules WHERE id = $1 RETURNING id', [req.params.id]);
+      if (r.rows.length === 0) return res.status(404).json({ ok: false, error: 'Not found' });
+      res.json({ ok: true, deleted: req.params.id });
+    } catch (err) {
+      console.error('template-rules delete error:', err.message);
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
 
-module.exports = router;
+  return router;
+}
+
+module.exports = createCustomViewsRouter;

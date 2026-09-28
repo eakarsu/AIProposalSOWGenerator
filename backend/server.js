@@ -1751,9 +1751,12 @@ app.get('/api/ai-results', authMiddleware, async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, parseInt(req.query.limit) || 20);
     const offset = (page - 1) * limit;
-    const count = await pool.query('SELECT COUNT(*) FROM ai_results');
-    const result = await pool.query('SELECT * FROM ai_results ORDER BY created_at DESC LIMIT $1 OFFSET $2', [limit, offset]);
-    res.json({ data: result.rows, pagination: { page, limit, total: parseInt(count.rows[0].count), totalPages: Math.ceil(count.rows[0].count / limit) } });
+    const count = await pool.query('SELECT COUNT(*) FROM ai_results WHERE user_id = $1', [req.user.id]);
+    const result = await pool.query(
+      'SELECT * FROM ai_results WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+      [req.user.id, limit, offset]
+    );
+    res.json({ data: result.rows, pagination: { page, limit, total: parseInt(count.rows[0].count), totalPages: Math.ceil(parseInt(count.rows[0].count) / limit) } });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1764,7 +1767,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/governed-proposal-releases', governanceRouter);
 
 // ============ CUSTOM VIEWS (mounted BEFORE 404 / app.listen) ============
-app.use('/api/custom-views', require('./routes/customViews'));
+app.use('/api/custom-views', require('./routes/customViews')({ pool, authMiddleware, checkRole }));
 
 // Start server
 app.listen(PORT, () => {
@@ -1772,7 +1775,7 @@ app.listen(PORT, () => {
 });
 
 // AI feature mount: sow-generate
-app.use('/api/ai/sow-generate', require('./routes/ai-sow-generate'));
+app.use('/api/ai/sow-generate', require('./routes/ai-sow-generate')({ authMiddleware }));
 // === Batch 07 Gaps & Frontend Mounts ===
 app.use('/api/clause-terms', require('./routes/clauseTerms')({ pool, authMiddleware, checkRole, callOpenRouter, aiRateLimiter }));
 app.use('/api/e-signatures', require('./routes/eSignature')({ pool, authMiddleware, checkRole }));

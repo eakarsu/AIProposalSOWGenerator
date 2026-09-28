@@ -12,7 +12,11 @@ export default function WinRateChart() {
     fetch(`${API}/custom-views/win-rate`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
-      .then(r => r.json())
+      .then(async r => {
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        return j;
+      })
       .then(setData)
       .catch(e => setErr(e.message))
       .finally(() => setLoading(false));
@@ -23,6 +27,18 @@ export default function WinRateChart() {
   if (!data) return null;
 
   const monthly = data.monthly || [];
+
+  if (data.hasData === false || monthly.length === 0) {
+    return (
+      <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 8, padding: 20, marginBottom: 24 }}>
+        <h3 style={{ margin: '0 0 6px', color: '#1a73e8' }}>Proposal Win Rate</h3>
+        <div style={{ padding: '18px 0', color: '#666', fontSize: 13 }}>
+          No proposal data yet. {data.message || 'Win/loss statistics will appear once proposals are recorded.'}
+        </div>
+      </div>
+    );
+  }
+
   const maxTotal = Math.max(1, ...monthly.map(m => m.total));
   const chartH = 220;
 

@@ -88,6 +88,10 @@ function createESignRouter({ pool, authMiddleware, checkRole }) {
     'I confirm I am authorised to sign on behalf of the named party, I have reviewed the ' +
     'document presented, and I agree to be bound by its terms electronically.';
 
+  // Admins and managers may act on any signature request; everyone else is
+  // scoped to the requests and documents they own.
+  const isPrivileged = (user) => !!user && (user.role === 'admin' || user.role === 'manager');
+
   router.post('/', authMiddleware, async (req, res) => {
     try {
       await ensureTable();
@@ -100,6 +104,9 @@ function createESignRouter({ pool, authMiddleware, checkRole }) {
 
       const doc = await loadDocument(proposalId, sowId);
       if (!doc) return res.status(404).json({ error: 'Document not found' });
+      if (!isPrivileged(req.user) && doc.row.created_by != null && Number(doc.row.created_by) !== Number(req.user.id)) {
+        return res.status(403).json({ error: 'You do not own this document' });
+      }
 
       const hours = Math.min(Math.max(Number(expiresInHours) || 168, 1), 24 * 90);
       const token = crypto.randomBytes(32).toString('hex');
@@ -123,6 +130,10 @@ function createESignRouter({ pool, authMiddleware, checkRole }) {
         signingToken: token,
         consentText: CONSENT_TEXT,
         documentDigest: digest,
+        delivery: {
+          configured: false,
+          note: 'No automated email/SMS delivery is configured. Deliver the signing token to the signer out-of-band.',
+        },
       });
     } catch (err) {
       console.error('e-sign request error:', err);
@@ -136,6 +147,7 @@ function createESignRouter({ pool, authMiddleware, checkRole }) {
       const { proposalId, sowId, status } = req.query;
       const where = [];
       const args = [];
+      if (!isPrivileged(req.user)) { args.push(req.user.id); where.push(`created_by = $${args.length}`); }
       if (proposalId) { args.push(proposalId); where.push(`proposal_id = $${args.length}`); }
       if (sowId) { args.push(sowId); where.push(`sow_id = $${args.length}`); }
       if (status) { args.push(status); where.push(`status = $${args.length}`); }
@@ -292,10 +304,20 @@ function createESignRouter({ pool, authMiddleware, checkRole }) {
     }
   });
 
-  router.post('/:id/void', authMiddleware, checkRole('admin', 'manager'), async (req, res) => {
+  router.post('/:id/void', authMiddleware, async (req, res) => {
     try {
       await ensureTable();
       const { reason } = req.body || {};
+      const existing = await pool.query(
+        'SELECT id, created_by, status FROM signature_requests WHERE id = $1',
+        [req.params.id]
+      );
+      if (existing.rows.length === 0) {
+        return res.status(404).json({ error: 'Signing request not found' });
+      }
+      if (!isPrivileged(req.user) && Number(existing.rows[0].created_by) !== Number(req.user.id)) {
+        return res.status(403).json({ error: 'You do not own this signing request' });
+      }
       const r = await pool.query(
         `UPDATE signature_requests
            SET status = 'voided', voided_by = $2, voided_at = NOW(), void_reason = $3

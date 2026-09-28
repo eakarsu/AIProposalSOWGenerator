@@ -22,7 +22,11 @@ export default function ServiceRevenueHeatmap() {
     fetch(`${API}/custom-views/service-revenue-heatmap`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
-      .then(r => r.json())
+      .then(async r => {
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        return j;
+      })
       .then(setData)
       .catch(e => setErr(e.message))
       .finally(() => setLoading(false));
@@ -35,6 +39,17 @@ export default function ServiceRevenueHeatmap() {
   const months = data.months || [];
   const services = data.services || [];
   const { min = 0, max = 1 } = data.bounds || {};
+
+  if (data.hasData === false || services.length === 0) {
+    return (
+      <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 8, padding: 20, marginBottom: 24 }}>
+        <h3 style={{ margin: '0 0 6px', color: '#1a73e8' }}>Service Line Revenue Heatmap</h3>
+        <div style={{ padding: '18px 0', color: '#666', fontSize: 13 }}>
+          No service revenue data. {data.message || 'Revenue will appear once proposals include priced line items tied to services.'}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 8, padding: 20, marginBottom: 24 }}>

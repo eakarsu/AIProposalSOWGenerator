@@ -28,7 +28,8 @@ export default function TemplateRulesEditor() {
     setLoading(true);
     try {
       const r = await fetch(`${API}/custom-views/template-rules`, { headers: authHeaders() });
-      const j = await r.json();
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setRules(j.rules || []);
     } catch (e) {
       setErr(e.message);
@@ -50,8 +51,8 @@ export default function TemplateRulesEditor() {
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify(form),
       });
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || 'Save failed');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || `Save failed (HTTP ${r.status})`);
       setForm(EMPTY);
       setEditId(null);
       await load();
@@ -65,10 +66,12 @@ export default function TemplateRulesEditor() {
   async function remove(id) {
     if (!window.confirm('Delete this pricing tier?')) return;
     try {
-      await fetch(`${API}/custom-views/template-rules/${id}`, {
+      const r = await fetch(`${API}/custom-views/template-rules/${id}`, {
         method: 'DELETE',
         headers: authHeaders(),
       });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || `Delete failed (HTTP ${r.status})`);
       await load();
     } catch (e) {
       setErr(e.message);
@@ -99,7 +102,8 @@ export default function TemplateRulesEditor() {
     <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 8, padding: 20, marginBottom: 24 }}>
       <h3 style={{ margin: '0 0 6px', color: '#1a73e8' }}>Proposal Template Rules (Pricing Tiers & T&Cs)</h3>
       <p style={{ margin: '0 0 16px', color: '#666', fontSize: 13 }}>
-        Configure pricing tiers, discount rates, payment terms, and terms & conditions applied to generated proposals.
+        Maintain the pricing tier, discount, payment terms and T&Cs reference. Writes require an admin or manager role.
+        These rules are stored for reference and are not yet applied automatically to generated proposals.
       </p>
 
       {err && <div style={{ background: '#fee', padding: 8, borderRadius: 4, marginBottom: 12, fontSize: 13, color: '#c00' }}>{err}</div>}
