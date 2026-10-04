@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const API = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+const API = process.env.REACT_APP_API_URL || '/api';
 
 export default function SowPdfExporter() {
   const [sowId, setSowId] = useState('');

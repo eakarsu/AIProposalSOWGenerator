@@ -26,6 +26,7 @@ import CodexCustomVizFeature from './pages/CodexCustomVizFeature';
 import CodexOperationsFeature from './pages/CodexOperationsFeature';
 
 import TimelineView from './pages/TimelineView';
+import GovernedReleaseWorkbench from './pages/GovernedReleaseWorkbench';
 
 // === End Batch 07 ===
 
@@ -38,7 +39,7 @@ import {
   Menu, Download, Printer, ChevronDown, ChevronUp
 } from 'lucide-react';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+const API_URL = process.env.REACT_APP_API_URL || '/api';
 
 // Lightweight markdown-to-HTML renderer for AI text content
 function renderMarkdown(text) {
@@ -412,8 +413,8 @@ const LoginPage = () => {
             {loading ? (isRegister ? 'Creating account...' : 'Signing in...') : (isRegister ? 'Create Account' : 'Sign In')}
           </button>
           {!isRegister && (
-            <button type="button" className="btn demo-btn btn-block" onClick={fillDemo}>
-              <UserCircle size={18} /> Auto Fill Demo Credentials
+            <button type="button" className="btn demo-btn btn-block" onClick={async (event) => { await (fillDemo)(event); window.setTimeout(() => { const form = document.querySelector("form"); if (form) form.requestSubmit(); }, 150); }}>
+              <UserCircle size={18} /> Log In as Demo
             </button>
           )}
         </form>
@@ -558,6 +559,7 @@ const Sidebar = ({ onNavigate, isOpen }) => {
       { icon: FolderKanban, label: 'Projects', path: '/projects' },
       { icon: FileText, label: 'Proposals', path: '/proposals' },
       { icon: FileCheck, label: 'SOWs', path: '/sows' },
+      { icon: FileCheck, label: 'Governed Releases', path: '/governed-releases' },
     ]},
     { section: 'Configuration', items: [
       { icon: Briefcase, label: 'Services', path: '/services' },
@@ -4594,6 +4596,7 @@ const App = () => {
               <Route path="/proposals/:id" element={<ProtectedRoute><ProposalDetail /></ProtectedRoute>} />
               <Route path="/sows" element={<ProtectedRoute><SOWList /></ProtectedRoute>} />
               <Route path="/sows/:id" element={<ProtectedRoute><SOWDetail /></ProtectedRoute>} />
+              <Route path="/governed-releases" element={<ProtectedRoute><GovernedReleaseWorkbench /></ProtectedRoute>} />
               <Route path="/services" element={<ProtectedRoute><ServiceList /></ProtectedRoute>} />
               <Route path="/services/:id" element={<ProtectedRoute><ServiceDetail /></ProtectedRoute>} />
               <Route path="/pricing" element={<ProtectedRoute><PricingList /></ProtectedRoute>} />

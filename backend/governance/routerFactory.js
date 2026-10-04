@@ -1,6 +1,7 @@
 function canonical(value) { if (Array.isArray(value)) return '['+value.map(canonical).join(',')+']'; if (value && typeof value==='object') return '{'+Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+canonical(value[k])).join(',')+'}'; return JSON.stringify(value); }
 function createGovernedRouter({ express, workflow, auth, db }) {
   const crypto = require('node:crypto');
+  const { createReleaseRoutes } = require('./releaseRoutes');
   const router = express.Router();
   const identifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
   const connectorNames = new Set((workflow.config.connectors || []).map((item) => item.name));
@@ -28,6 +29,8 @@ function createGovernedRouter({ express, workflow, auth, db }) {
       message: error.status ? error.message : 'The governed workflow could not complete.',
     });
   }
+
+  const releaseRoutes = createReleaseRoutes({ express, router, workflow, db, tenant, inScope, respondError });
 
   router.use(auth);
 
@@ -58,6 +61,8 @@ function createGovernedRouter({ express, workflow, auth, db }) {
       evidenceKinds: workflow.config.evidenceKinds,
       professionalBoundary: workflow.config.professionalBoundary,
       automatedFinalDecisions: false,
+      localCapabilities: { reviewedPdfRender: true, namedSignerTokenAcceptance: true,
+        externalSignerDelivery: false, externalSignatureReceipt: false, crmReceipt: false },
       connectors: (workflow.config.connectors || []).map((item) => ({
         ...item,
         configured: false,
@@ -275,6 +280,18 @@ function createGovernedRouter({ express, workflow, auth, db }) {
           throw error;
         }
         const current = cases[0];
+        if (req.body?.action === 'record_export') {
+          const rendered = await query(
+            'SELECT id FROM governed_rendered_pdfs WHERE tenant_id=$1 AND case_id=$2',
+            [ctx.tenantId, current.id]
+          );
+          if (!rendered[0]) {
+            const error = new Error('Render the reviewed PDF before recording export.');
+            error.code = 'RENDERED_PDF_REQUIRED';
+            error.status = 409;
+            throw error;
+          }
+        }
         const decision = workflow.transition({
           state: current.state,
           version: current.version,
@@ -361,9 +378,8 @@ function createGovernedRouter({ express, workflow, auth, db }) {
     }
   });
 
+  releaseRoutes.attachPrivate();
   return router;
 }
 
 module.exports = { createGovernedRouter };
-
-
