@@ -27,6 +27,7 @@ import CodexOperationsFeature from './pages/CodexOperationsFeature';
 
 import TimelineView from './pages/TimelineView';
 import GovernedReleaseWorkbench from './pages/GovernedReleaseWorkbench';
+import FormattedAIReport from './components/FormattedAIReport';
 
 // === End Batch 07 ===
 
@@ -370,6 +371,8 @@ const LoginPage = () => {
   };
 
   const fillDemo = () => {
+    if (process.env.REACT_APP_ENABLE_DEMO_CREDENTIAL_AUTOFILL !== 'true' ||
+        !process.env.REACT_APP_DEMO_EMAIL || !process.env.REACT_APP_DEMO_PASSWORD) return;
     setEmail(process.env.REACT_APP_DEMO_EMAIL || '');
     setPassword(process.env.REACT_APP_DEMO_PASSWORD || '');
   };
@@ -412,9 +415,10 @@ const LoginPage = () => {
           <button type="submit" className="btn btn-primary btn-block btn-lg" disabled={loading}>
             {loading ? (isRegister ? 'Creating account...' : 'Signing in...') : (isRegister ? 'Create Account' : 'Sign In')}
           </button>
-          {!isRegister && (
-            <button type="button" className="btn demo-btn btn-block" onClick={async (event) => { await (fillDemo)(event); window.setTimeout(() => { const form = document.querySelector("form"); if (form) form.requestSubmit(); }, 150); }}>
-              <UserCircle size={18} /> Log In as Demo
+          {!isRegister && process.env.REACT_APP_ENABLE_DEMO_CREDENTIAL_AUTOFILL === 'true' &&
+            process.env.REACT_APP_DEMO_EMAIL && process.env.REACT_APP_DEMO_PASSWORD && (
+            <button type="button" className="btn demo-btn btn-block" onClick={fillDemo}>
+              <UserCircle size={18} /> Fill Demo Credentials
             </button>
           )}
         </form>
@@ -2685,7 +2689,8 @@ const AIGenerator = () => {
               <button
                 key={index}
                 className="btn btn-secondary btn-sm"
-                onClick={() => setPrompt(project.description)}
+                type="button"
+                onClick={() => { setType(['proposal', 'sow', 'email', 'summary', 'proposal'][index]); setPrompt(project.description); }}
                 style={{ fontSize: 13 }}
               >
                 {project.name}
@@ -2721,7 +2726,7 @@ const AIGenerator = () => {
 
         {output && (
           <>
-            <div className="ai-output">{output}</div>
+            <FormattedAIReport response={output} title="Generated content" />
             <div className="ai-actions">
               <button className="btn btn-secondary" onClick={() => navigator.clipboard.writeText(output)}>
                 <Copy size={18} /> Copy to Clipboard
@@ -2769,6 +2774,11 @@ const AIGenerator = () => {
           </div>
           {showPaste && (
             <div style={{ marginTop: 12 }}>
+              <div className="example-buttons">
+                <span className="example-label">Try Example:</span>
+                <button type="button" className="btn btn-outline btn-sm" onClick={() => { setImproveStyle('professional'); setPasteText('Our team will redesign the client portal to make onboarding easier. We will migrate account records, add role-based access, and train support staff before launch.'); }}>Client portal draft</button>
+                <button type="button" className="btn btn-outline btn-sm" onClick={() => { setImproveStyle('concise'); setPasteText('The project includes discovery workshops, data mapping, migration rehearsals, security testing, and a phased launch. Each milestone requires client approval before the next phase begins.'); }}>Migration scope draft</button>
+              </div>
               <textarea
                 className="form-textarea"
                 rows={4}
@@ -2794,6 +2804,8 @@ const AIGenerator = () => {
     </div>
   );
 };
+
+export { AIGenerator, AIPricingSuggester, AIWinLossAnalyzer, AICompetitorDifferentiator, AITimelineGenerator, AIRiskAssessment };
 
 // Analytics
 const Analytics = () => {
@@ -3065,6 +3077,7 @@ const AIPricingSuggester = () => {
                 </div>
               </div>
               <div className="detail-body">
+                <FormattedAIReport response={selectedItem} title="AI analysis" />
                 <div className="ai-highlight-cards">
                   <div className="ai-highlight-card green">
                     <div className="ai-highlight-label">Suggested Range</div>
@@ -3118,10 +3131,10 @@ const AIPricingSuggester = () => {
             <div className="modal-body">
               <div className="example-buttons">
                 <span className="example-label">Try Example:</span>
-                <button className="btn btn-outline btn-sm" onClick={() => setForm({ projectName: 'E-Commerce Platform Redesign', projectType: 'Web Application', complexity: 'high', durationWeeks: 16, teamSize: 5, requirements: 'Full redesign of existing e-commerce platform with new payment gateway integration, inventory management, customer analytics dashboard, mobile-responsive design, and migration of 50K+ product catalog', clientId: '', projectId: '' })}>E-Commerce</button>
-                <button className="btn btn-outline btn-sm" onClick={() => setForm({ projectName: 'Healthcare Patient Portal', projectType: 'Web Application', complexity: 'high', durationWeeks: 24, teamSize: 6, requirements: 'HIPAA-compliant patient portal with appointment scheduling, telemedicine integration, EHR data sync, prescription management, and secure messaging between patients and providers', clientId: '', projectId: '' })}>Healthcare</button>
-                <button className="btn btn-outline btn-sm" onClick={() => setForm({ projectName: 'Mobile Banking App', projectType: 'Mobile Application', complexity: 'high', durationWeeks: 20, teamSize: 7, requirements: 'iOS and Android banking app with biometric auth, real-time transaction tracking, bill pay, P2P transfers, spending analytics, and PCI-DSS compliance', clientId: '', projectId: '' })}>FinTech</button>
-                <button className="btn btn-outline btn-sm" onClick={() => setForm({ projectName: 'CRM Data Migration', projectType: 'System Integration', complexity: 'medium', durationWeeks: 8, teamSize: 3, requirements: 'Migrate 200K customer records from legacy CRM to Salesforce, including data cleansing, field mapping, workflow automation setup, and user training', clientId: '', projectId: '' })}>CRM Migration</button>
+                <button className="btn btn-outline btn-sm" onClick={() => setForm({ projectName: 'E-Commerce Platform Redesign', projectType: 'Web Application', complexity: 'high', durationWeeks: 16, teamSize: 5, requirements: 'Full redesign of existing e-commerce platform with new payment gateway integration, inventory management, customer analytics dashboard, mobile-responsive design, and migration of 50K+ product catalog', clientId: form.clientId, projectId: form.projectId })}>E-Commerce</button>
+                <button className="btn btn-outline btn-sm" onClick={() => setForm({ projectName: 'Healthcare Patient Portal', projectType: 'Web Application', complexity: 'high', durationWeeks: 24, teamSize: 6, requirements: 'HIPAA-compliant patient portal with appointment scheduling, telemedicine integration, EHR data sync, prescription management, and secure messaging between patients and providers', clientId: form.clientId, projectId: form.projectId })}>Healthcare</button>
+                <button className="btn btn-outline btn-sm" onClick={() => setForm({ projectName: 'Mobile Banking App', projectType: 'Mobile Application', complexity: 'high', durationWeeks: 20, teamSize: 7, requirements: 'iOS and Android banking app with biometric auth, real-time transaction tracking, bill pay, P2P transfers, spending analytics, and PCI-DSS compliance', clientId: form.clientId, projectId: form.projectId })}>FinTech</button>
+                <button className="btn btn-outline btn-sm" onClick={() => setForm({ projectName: 'CRM Data Migration', projectType: 'System Integration', complexity: 'medium', durationWeeks: 8, teamSize: 3, requirements: 'Migrate 200K customer records from legacy CRM to Salesforce, including data cleansing, field mapping, workflow automation setup, and user training', clientId: form.clientId, projectId: form.projectId })}>CRM Migration</button>
               </div>
               <div className="form-grid">
                 <div className="form-group full-width">
@@ -3291,6 +3304,7 @@ const AIWinLossAnalyzer = () => {
                 </div>
               </div>
               <div className="detail-body">
+                <FormattedAIReport response={selectedItem} title="AI analysis" />
                 {selectedItem.key_factors && selectedItem.key_factors.length > 0 && (
                   <div className="detail-section">
                     <h3 className="detail-section-title">Key Factors</h3>
@@ -3482,6 +3496,7 @@ const AICompetitorDifferentiator = () => {
                 </div>
               </div>
               <div className="detail-body">
+                <FormattedAIReport response={selectedItem} title="AI analysis" />
                 <div className="detail-section">
                   <h3 className="detail-section-title"><CheckCircle size={16} className="text-success" /> Our Strengths</h3>
                   <MarkdownText content={selectedItem.our_strengths} />
@@ -3687,6 +3702,7 @@ const AITimelineGenerator = () => {
                 </div>
               </div>
               <div className="detail-body">
+                <FormattedAIReport response={selectedItem} title="AI analysis" />
                 {parsePhases(selectedItem.phases).length > 0 && (
                   <div className="detail-section">
                     <h3 className="detail-section-title">Project Phases</h3>
@@ -3907,6 +3923,7 @@ const AIRiskAssessment = () => {
                 </div>
               </div>
               <div className="detail-body">
+                <FormattedAIReport response={selectedItem} title="AI analysis" />
                 {parseRisks(selectedItem.identified_risks).length > 0 && (
                   <div className="detail-section">
                     <h3 className="detail-section-title">Identified Risks</h3>

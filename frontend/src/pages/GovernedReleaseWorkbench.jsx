@@ -1,3 +1,4 @@
+import FormattedAIReport from "../components/FormattedAIReport";
 import React, { useState } from 'react';
 import axios from 'axios';
 import ProposalReviewChecklist from './ProposalReviewChecklist';
@@ -192,7 +193,7 @@ export default function GovernedReleaseWorkbench() {
               placeholder='{"requirementsVersion":"r1","scopeVersion":"s1","rateCardVersion":"rate1","clauseLibraryVersion":"c1","draftVersion":"d1","acceptanceCoverage":1,"pricingReconciliationStatus":"balanced","legalReviewStatus":"passed","deliveryFeasibilityStatus":"verified","privacyStatus":"passed","exportProfile":"pdf_a","policyVersion":"v1"}' />
             <button disabled={busy} type="submit">Assess for review</button>
           </form>
-          {assessmentResult && <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(assessmentResult, null, 2)}</pre>}
+          {assessmentResult && <FormattedAIReport response={assessmentResult} />}
           <h3>Human decision</h3>
           <form onSubmit={transition}>
             <select required value={decision.action} onChange={e => setDecision({ ...decision, action: e.target.value })}>

@@ -1,5 +1,6 @@
 // // === Batch 07 Gaps & Frontend Mounts ===
 import React, { useState } from 'react';
+import FormattedAIReport from '../components/FormattedAIReport';
 
 export default function CfProposalTemplateLibrary() {
   const [input, setInput] = useState('');
@@ -8,18 +9,9 @@ export default function CfProposalTemplateLibrary() {
   const [error, setError] = useState(null);
 
   const sampleRequests = [
-      {
-          "label": "Scenario",
-          "value": "Run Proposal template library for a realistic customer case.\nContext: a team needs a practical recommendation based on incomplete operating data.\nGoal: identify the best action, key risks, missing information, and expected business impact.\nReturn: summary, prioritized action plan, assumptions, and follow-up questions."
-      },
-      {
-          "label": "Data sample",
-          "value": "Analyze this Proposal template library data sample.\nInput records:\n- Record 1: urgent, customer impact high, owner unassigned\n- Record 2: medium priority, blocked by missing data\n- Record 3: recurring issue, automation opportunity\nReturn structured findings, anomalies, recommendations, and confidence."
-      },
-      {
-          "label": "Executive review",
-          "value": "Prepare an executive review for Proposal template library.\nAudience: business owner, operations lead, and implementation team.\nInclude impact, risk, estimated effort, decision points, and a concise next-step plan."
-      }
+    { label: "Project scenario", value: "A consulting team needs reusable discovery, implementation, pricing, and legal sections for mid-market cloud migration proposals.\nPrepare a practical project-specific response with scope, deliverables, assumptions, missing prerequisites, risks, and next decisions." },
+    { label: "Delivery review", value: "A consulting team needs reusable discovery, implementation, pricing, and legal sections for mid-market cloud migration proposals.\nReview the delivery plan: identify dependencies, owners by role, milestones, acceptance evidence, likely blockers, and mitigation options. Do not invent record IDs." },
+    { label: "Executive brief", value: "A consulting team needs reusable discovery, implementation, pricing, and legal sections for mid-market cloud migration proposals.\nWrite a concise executive brief with business outcome, estimated effort, commercial considerations, key risks, and decisions needed before approval." }
   ];
 
   const applySampleRequest = (value) => {
@@ -82,11 +74,7 @@ export default function CfProposalTemplateLibrary() {
       {error && (
         <div style={{ marginTop: 16, padding: 12, background: '#fee', color: '#900', borderRadius: 6 }}>{error}</div>
       )}
-      {output && (
-        <pre style={{ marginTop: 16, padding: 12, background: '#f7f7f7', borderRadius: 6, overflow: 'auto', maxHeight: 480 }}>
-{JSON.stringify(output, null, 2)}
-        </pre>
-      )}
+      {output !== null && <FormattedAIReport response={output} title="AI result" />}
     </div>
   );
 }

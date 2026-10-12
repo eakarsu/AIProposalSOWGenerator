@@ -63,6 +63,7 @@ if [[ -f "$PROJECT_DIR/.env" ]]; then
 fi
 BACKEND_PORT="${BACKEND_PORT:-3001}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+printf 'Configured service ports:\n  Frontend port: %s - http://localhost:%s\n  Backend port:  %s - http://localhost:%s\n' "$FRONTEND_PORT" "$FRONTEND_PORT" "$BACKEND_PORT" "$BACKEND_PORT"
 CHILD_PIDS=()
 require_file(){ [ -f "$1" ]||{ echo "Missing required file: $1" >&2;exit 1;};}
 require_dir(){ [ -d "$1" ]||{ echo "Missing dependencies: $1 (install explicitly before startup)" >&2;exit 1;};}
@@ -77,5 +78,5 @@ port_free "$BACKEND_PORT";port_free "$FRONTEND_PORT"
 (cd "$PROJECT_DIR/backend"&&node scripts/prepareRuntime.js)
 (cd "$PROJECT_DIR/backend"&&PORT="$BACKEND_PORT" node server.js)&CHILD_PIDS+=("$!")
 (cd "$PROJECT_DIR/frontend"&&PORT="$FRONTEND_PORT" BROWSER=none npm start)&CHILD_PIDS+=("$!")
-echo "Proposal services started without installing, seeding, or reclaiming ports."
+echo "Proposal service processes launched."
 wait "${CHILD_PIDS[@]}"
